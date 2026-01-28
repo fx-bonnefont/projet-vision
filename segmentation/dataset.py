@@ -85,6 +85,10 @@ class SegmentationDataset(Dataset):
         return len(self.image_files)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        # Debug: Print progress for first few items
+        if idx < 5:
+            print(f"Loading sample {idx+1}/{len(self)}...")
+            
         if self.cached_data:
             image_raw, mask_raw = self.cached_data[idx]
         else:
