@@ -112,11 +112,17 @@ class SegmentationDataset(Dataset):
         img_path = self.image_files[idx]
         label_path = self.label_dir / f"{img_path.stem}.txt"
 
-        # Load full image
-        image = cv2.imread(str(img_path))
-        if image is None:
-            raise ValueError(f"Could not load image: {img_path}")
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # Load full image with error handling
+        try:
+            image = cv2.imread(str(img_path))
+            if image is None:
+                raise ValueError(f"cv2.imread returned None")
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        except Exception as e:
+            print(f"⚠️ Skipping corrupted image {img_path.name}: {e}")
+            # Fallback: return a random valid image instead of crashing
+            fallback_idx = (idx + 1) % len(self.image_files)
+            return self._load_raw_data(fallback_idx)
         
         orig_h, orig_w = image.shape[:2]
         crop_size = self.img_size
