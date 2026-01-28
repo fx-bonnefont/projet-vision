@@ -32,6 +32,8 @@ wheels/
 .DS_Store
 
 # Project specific
+checkpoints/
+logs/
 inference_output/
 *.pth
 *.csv
