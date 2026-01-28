@@ -3,6 +3,7 @@ Inference script: visualize predictions and extract bounding boxes.
 Supports multiple backbones via --backbone argument.
 """
 import argparse
+import os
 import random
 from pathlib import Path
 
@@ -33,34 +34,91 @@ def preprocess_image(image: np.ndarray, img_size: int) -> torch.Tensor:
     return image
 
 
+def predict_tiled(model, image: np.ndarray, tile_size: int = 512, device: str = 'cpu') -> np.ndarray:
+    """
+    Run inference using sliding window (tiling) to preserve resolution.
+    Follows SOTA approach (e.g. SAHI, U-Net Tiling) for large images.
+    """
+    h_img, w_img = image.shape[:2]
+    
+    # Initialize full-size probability mask
+    full_prob_mask = np.zeros((h_img, w_img), dtype=np.float32)
+    count_mask = np.zeros((h_img, w_img), dtype=np.float32) # For averaging overlaps
+    
+    # Config
+    stride = tile_size # No overlap for speed, can reduce to tile_size//2 for better boundary fusion
+    
+    # Tiles Loop
+    for y in range(0, h_img, stride):
+        for x in range(0, w_img, stride):
+            # Coordinates
+            x1 = x
+            y1 = y
+            x2 = min(x + tile_size, w_img)
+            y2 = min(y + tile_size, h_img)
+            
+            # Dimensions of current tile (might be smaller at edges)
+            h_tile = y2 - y1
+            w_tile = x2 - x1
+            
+            # Extract crop
+            crop = image[y1:y2, x1:x2]
+            
+            # Pad crop to fixed tile_size if needed (for batching/model req)
+            # The model expects exactly tile_size (e.g. 512)
+            pad_h = tile_size - h_tile
+            pad_w = tile_size - w_tile
+            
+            if pad_h > 0 or pad_w > 0:
+                crop = np.pad(crop, ((0, pad_h), (0, pad_w), (0, 0)), mode='constant')
+                
+            # Preprocess crop
+            input_tensor = preprocess_image(crop, tile_size).to(device)
+            
+            # Inference
+            model.eval()
+            with torch.no_grad():
+                logits = model(input_tensor)
+                probs = torch.sigmoid(logits) # [1, 1, 512, 512]
+                
+            # Extract valid region (remove padding)
+            pred_crop = probs[0, 0].cpu().numpy()
+            valid_pred = pred_crop[:h_tile, :w_tile]
+            
+            # Accumulate
+            full_prob_mask[y1:y2, x1:x2] += valid_pred
+            count_mask[y1:y2, x1:x2] += 1.0
+
+    # Average overlaps (if any)
+    full_prob_mask /= np.maximum(count_mask, 1.0)
+    
+    return full_prob_mask
+
+
 def predict(model, image: np.ndarray, img_size: int, device: str = 'cpu',
             threshold: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
     """
-    Run inference and return probability mask and binary mask.
-
-    Args:
-        model: Trained segmentation model
-        image: Input image (RGB, any size)
-        img_size: Model input size
-        device: Device to run inference on
-        threshold: Threshold for binary mask
-
-    Returns:
-        (prob_mask, binary_mask) at feature resolution
+    Wrapper that selects Tiled Inference if image is large.
     """
-    # Preprocess
-    input_tensor = preprocess_image(image, img_size).to(device)
+    h, w = image.shape[:2]
+    
+    if h > img_size or w > img_size:
+        print(f"  Large image detected ({w}x{h}). Using Sliding Window Inference (Tile={img_size})...")
+        prob_mask = predict_tiled(model, image, tile_size=img_size, device=device)
+    else:
+        # Standard resize for small images
+        input_tensor = preprocess_image(image, img_size).to(device)
+        model.eval()
+        with torch.no_grad():
+            logits = model(input_tensor)
+            probs = torch.sigmoid(logits)
+        prob_mask = probs[0, 0].cpu().numpy()
+        
+        # Resize mask back to original size if it was resized
+        if prob_mask.shape != (h, w):
+             prob_mask = cv2.resize(prob_mask, (w, h))
 
-    # Inference
-    model.eval()
-    with torch.no_grad():
-        logits = model(input_tensor)
-        probs = torch.sigmoid(logits)
-
-    # Convert to numpy
-    prob_mask = probs[0, 0].cpu().numpy()
     binary_mask = (prob_mask > threshold).astype(np.uint8)
-
     return prob_mask, binary_mask
 
 
@@ -204,10 +262,12 @@ def run_inference(
 
 def main():
     parser = argparse.ArgumentParser(description='Run inference and visualize predictions')
+    parser.add_argument('--data', type=str, default=None,
+                        help='Root directory containing "images/test" (preferred over --images)')
     parser.add_argument('--model', type=str, default='model.pth',
                         help='Path to trained model weights')
-    parser.add_argument('--images', type=str, required=True,
-                        help='Directory containing images')
+    parser.add_argument('--images', type=str, default=None,
+                        help='Specific directory containing images (optional override)')
     parser.add_argument('--output', type=str, default='./inference_output',
                         help='Output directory for visualizations')
     parser.add_argument('--backbone', type=str, default=None,
@@ -221,6 +281,19 @@ def main():
                         help='Device (cuda, mps, cpu)')
 
     args = parser.parse_args()
+
+    # Determine image directory
+    if args.data:
+        # Default to test images in data structure
+        args.images = os.path.join(args.data, 'images', 'test')
+        if not os.path.exists(args.images):
+             # Fallback to train if test doesn't exist? Or just error?
+             # Let's try train if test not found, just in case
+             if os.path.exists(os.path.join(args.data, 'images', 'train')):
+                 args.images = os.path.join(args.data, 'images', 'train')
+    
+    if not args.images:
+        parser.error("You must specify either --data (containing images/test) or --images")
 
     run_inference(
         model_path=args.model,

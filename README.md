@@ -1,48 +1,59 @@
 # Projet Vision - Segmentation Binaire
-
 Ce projet permet d'entraîner un modèle de segmentation binaire (objets vs fond) sur des images aériennes/satellites (format DOTA).
 
-Il utilise des **modèles de fondation (Backbones)** pré-entraînés (DINOv2, DINOv3, SAM3) pour extraire des features puissantes sans avoir besoin d'un gros dataset.
+Il utilise des **modèles de fondation** pré-entraînés (DINOv3, SAM3, etc.) pour des performances élevées avec peu de données.
 
-## Installation
+## 📦 Installation
 
 ```bash
 uv sync
 ```
 
-## Utilisation
+## 📂 Structure des Données (Important)
+
+Vos données doivent être organisées strictement comme suit :
+
+```text
+MON_DOSSIER_DOTA/
+├── images/
+│   ├── train/  (Images d'entraînement)
+│   └── test/   (Images de validation/test)
+├── labels/
+│   ├── train/  (Labels d'entraînement .txt)
+│   └── test/   (Labels de validation .txt)
+└── debug/      (Facultatif, pour les visualisations)
+```
+
+## 🚀 Utilisation
 
 ### 1. Entraînement
 
-Pour entraîner le modèle, il faut spécifier les dossiers d'images et de labels.
-Vous pouvez optionnellement ajouter un jeu de validation pour surveiller le sur-apprentissage.
+Il suffit d'indiquer le dossier racine `--data`. Le script trouvera automatiquement les dossiers `train` et `test`.
 
 ```bash
-uv run python train.py \
-    --backbone dinov3_vitb16 \
-    --images ./train/images \
-    --labels ./train/labels \
-    --val-images ./test/images \
-    --val-labels ./test/labels \
-    --epochs 20
+uv run python train.py --data /chemin/vers/MON_DOSSIER_DOTA
 ```
+
+*Options utiles :*
+*   `--backbone dinov3_vit7b16_sat` (par défaut)
+*   `--epochs 20`
+*   `--batch-size 4`
 
 ### 2. Inférence (Test)
 
-Pour tester le modèle sur de nouvelles images et visualiser le résultat :
+Pour tester le modèle (par défaut sur le dossier `images/test`) :
 
 ```bash
 uv run python inference.py \
     --model model.pth \
-    --images ./test/images
+    --data /chemin/vers/MON_DOSSIER_DOTA
 ```
-*Le script détecte automatiquement quel backbone a été utilisé lors de l'entraînement.*
 
-## Modèles Disponibles
+*Le script détecte automatiquement le backbone utilisé lors de l'entraînement.*
 
-Vous pouvez choisir le backbone avec l'argument `--backbone` :
+## 🧠 Modèles Disponibles
 
-*   **DINOv3** (recommandé) : `dinov3_vits16`, `dinov3_vitb16`, `dinov3_vitl16`, `dinov3_vit7b16_sat` (spécial satellite).
-*   **DINOv2** : `dinov2_vits14`, `dinov2_vitb14`...
+*   **DINOv3** (Défaut) : `dinov3_vit7b16_sat` (Optimisé Satellite), `dinov3_vitb16`...
 *   **SAM3** : `sam3`
-*   **ResNet** (classique) : `resnet50`
+*   **DINOv2** : `dinov2_vits14`...
+*   **ResNet** : `resnet50`

@@ -29,10 +29,12 @@ class SegmentationDataset(Dataset):
         image_dir: str,
         label_dir: str,
         img_size: int = 518,
-        feat_size: int = 37
+        feat_size: int = 37,
+        cache_data: bool = False
     ):
         self.image_dir = Path(image_dir)
         self.label_dir = Path(label_dir)
+        self.cache_data = cache_data
 
         if not self.image_dir.exists():
             raise FileNotFoundError(f"Image directory not found: {self.image_dir}")
@@ -45,7 +47,9 @@ class SegmentationDataset(Dataset):
         # Find all images
         self.image_files = []
         for ext in ['*.png', '*.jpg', '*.jpeg']:
-            self.image_files.extend(self.image_dir.glob(ext))
+            # Filter out macOS hidden/metadata files (e.g. ._image.png)
+            found = [p for p in self.image_dir.glob(ext) if not p.name.startswith('._')]
+            self.image_files.extend(found)
         self.image_files = sorted(self.image_files)
 
         if len(self.image_files) == 0:
@@ -55,8 +59,140 @@ class SegmentationDataset(Dataset):
         print(f"  Image size: {img_size}x{img_size}")
         print(f"  Feature size: {feat_size}x{feat_size}")
 
+        # Cache data if requested
+        self.cached_data = None
+        if self.cache_data:
+            import os
+            from concurrent.futures import ProcessPoolExecutor
+            from tqdm import tqdm
+            
+            # Use 80% of cores for caching to stay responsive
+            scan_workers = max(1, int(os.cpu_count() * 0.8))
+            print(f"Caching {len(self.image_files)} images in RAM (optimized uint8) using {scan_workers} workers...")
+            
+            self.cached_data = [None] * len(self.image_files)
+            
+            # Helper to wrap the method for pickle compatibility if needed, 
+            # but _load_raw_data is an instance method. 
+            # Best is to use a static helper or just map indices.
+            # We can use a lambda or partial if the method is picklable, 
+            # but 'self' inside process pool can be tricky with large objects.
+            # Since SegmentationDataset is small (just paths), it should be fine.
+            
+            with ProcessPoolExecutor(max_workers=scan_workers) as executor:
+                results = list(tqdm(executor.map(self._load_raw_data, range(len(self.image_files))), 
+                                   total=len(self.image_files), desc="Caching"))
+            
+            self.cached_data = results
+
     def __len__(self):
         return len(self.image_files)
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        # Retrieve raw uint8 data
+        if self.cached_data:
+            image_raw, mask_raw = self.cached_data[idx]
+        else:
+            image_raw, mask_raw = self._load_raw_data(idx)
+
+        # On-the-fly normalization (fast on M4)
+        # 1. Image: uint8 (H,W,3) -> float32 (3,H,W) normalized
+        image = image_raw.astype(np.float32) / 255.0
+        image = (image - IMAGENET_MEAN) / IMAGENET_STD
+        image = torch.from_numpy(image).permute(2, 0, 1).float()
+
+        # 2. Mask: uint8 (H,W) -> float32 (1,H,W)
+        mask = torch.from_numpy(mask_raw).unsqueeze(0).float()
+
+        return image, mask
+
+    def _load_raw_data(self, idx: int) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Load image and generate a 512x512 crop (Smart Crop).
+        Preserves resolution for small objects.
+        """
+        img_path = self.image_files[idx]
+        label_path = self.label_dir / f"{img_path.stem}.txt"
+
+        # Load full image
+        image = cv2.imread(str(img_path))
+        if image is None:
+            raise ValueError(f"Could not load image: {img_path}")
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) # [H, W, 3]
+        
+        orig_h, orig_w = image.shape[:2]
+        crop_size = self.img_size # e.g. 512
+        
+        # Parse labels to find objects
+        object_centers = []
+        if label_path.exists():
+            with open(label_path, 'r') as f:
+                for line in f:
+                    # Quick parse for centers
+                    coords = self._detect_format_and_parse(line, orig_h, orig_w)
+                    if coords is not None:
+                        # coords is [4, 2] array of (x,y)
+                        center = coords.mean(axis=0) # [center_x, center_y]
+                        object_centers.append(center)
+        
+        # Decide crop coordinates (x, y)
+        if orig_h <= crop_size or orig_w <= crop_size:
+            # Image smaller than crop: Padding needed mechanism
+            # For simplicity, we just resize small images UP to crop_size or PAD
+            # Let's simple Resize if small, or padded crop.
+            # Easiest: Pad image to ensure it's at least crop_size
+            pad_h = max(0, crop_size - orig_h)
+            pad_w = max(0, crop_size - orig_w)
+            if pad_h > 0 or pad_w > 0:
+                image = np.pad(image, ((0, pad_h), (0, pad_w), (0, 0)), mode='constant')
+                orig_h, orig_w = image.shape[:2] # Update
+                
+            x_start = 0
+            y_start = 0
+        else:
+            # Determine crop center
+            # 80% chance to center on an object if objects exist
+            import random
+            if len(object_centers) > 0 and random.random() < 0.8:
+                center = random.choice(object_centers)
+                cx, cy = int(center[0]), int(center[1])
+                
+                # Jitter center slightly (+- 100 px)
+                cx += random.randint(-100, 100)
+                cy += random.randint(-100, 100)
+            else:
+                # Random crop
+                cx = random.randint(0, orig_w)
+                cy = random.randint(0, orig_h)
+                
+            # Calculate top-left corner from center
+            x_start = max(0, min(orig_w - crop_size, cx - crop_size // 2))
+            y_start = max(0, min(orig_h - crop_size, cy - crop_size // 2))
+
+        # Perform Crop on Image
+        image_crop = image[y_start:y_start+crop_size, x_start:x_start+crop_size]
+        
+        # Generate Mask for this specific crop
+        # We only draw the mask for the cropped region to save time?
+        # NO, 'coords' are absolute. We need to shift them by (x_start, y_start)
+        # and flip/clip.
+        
+        mask_crop = np.zeros((crop_size, crop_size), dtype=np.uint8)
+        
+        if label_path.exists():
+             with open(label_path, 'r') as f:
+                for line in f:
+                    coords = self._detect_format_and_parse(line, orig_h, orig_w) # Absolute coords
+                    if coords is not None:
+                        # Shift coordinates to crop frame
+                        coords[:, 0] -= x_start
+                        coords[:, 1] -= y_start
+                        
+                        # Fill polygon on the crop mask
+                        # cv2.fillPoly handles clipping automatically
+                        cv2.fillPoly(mask_crop, [coords.astype(np.int32)], 1)
+
+        return image_crop, mask_crop
 
     def _parse_dota_line(self, line: str) -> np.ndarray | None:
         """Parse DOTA format: x1 y1 x2 y2 x3 y3 x4 y4 class difficulty"""
@@ -138,42 +274,9 @@ class SegmentationDataset(Dataset):
 
         return mask
 
-    def _preprocess_image(self, image: np.ndarray) -> torch.Tensor:
-        """Preprocess image: resize, normalize, to tensor."""
-        # Resize
-        image = cv2.resize(image, (self.img_size, self.img_size))
 
-        # Normalize (ImageNet stats)
-        image = image.astype(np.float32) / 255.0
-        image = (image - IMAGENET_MEAN) / IMAGENET_STD
 
-        # To tensor [C, H, W]
-        image = torch.from_numpy(image).permute(2, 0, 1).float()
-        return image
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        img_path = self.image_files[idx]
-        label_path = self.label_dir / f"{img_path.stem}.txt"
-
-        # Load image
-        image = cv2.imread(str(img_path))
-        if image is None:
-            raise ValueError(f"Could not load image: {img_path}")
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-        orig_h, orig_w = image.shape[:2]
-
-        # Create mask at original resolution
-        mask = self._create_mask(label_path, orig_h, orig_w)
-
-        # Preprocess image
-        image = self._preprocess_image(image)
-
-        # Resize mask to feature size for loss computation
-        mask = cv2.resize(mask, (self.feat_size, self.feat_size), interpolation=cv2.INTER_NEAREST)
-        mask = torch.from_numpy(mask).unsqueeze(0).float()  # [1, H, W]
-
-        return image, mask
 
 
 def get_dataloader(
@@ -183,19 +286,21 @@ def get_dataloader(
     feat_size: int = 37,
     batch_size: int = 4,
     shuffle: bool = True,
-    num_workers: int = 0
+    num_workers: int = 0,
+    cache: bool = False
 ) -> torch.utils.data.DataLoader:
     """Create a DataLoader for the segmentation dataset."""
     dataset = SegmentationDataset(
         image_dir=image_dir,
         label_dir=label_dir,
         img_size=img_size,
-        feat_size=feat_size
+        feat_size=feat_size,
+        cache_data=cache
     )
     return torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=False  # Disable for MPS compatibility
     )

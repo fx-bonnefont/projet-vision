@@ -39,6 +39,10 @@ uv.lock
 
 # Project specific
 inference_output/
-model.pth
-Images/
-Labels/
+*.pth
+*.csv
+# Data (assuming data is external, but just in case)
+data/
+DOTA/
+images/
+labels/
