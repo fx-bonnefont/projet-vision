@@ -1,0 +1,14 @@
+[project]
+name = "dota"
+version = "0.1.0"
+description = "DOTA dataset visualization and binary segmentation POC"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "opencv-python>=4.10.0",
+    "numpy>=2.0.0",
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "pillow>=10.0.0",
+    "transformers>=4.56.0",  # For SAM3 backbone and DINOv3
+]
