@@ -2,12 +2,12 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Virtual Environments
+*.so
+.Python
 .venv/
 venv/
-env/
 ENV/
+env/
 
 # Distribution / Packaging
 build/
@@ -24,12 +24,6 @@ var/
 wheels/
 *.egg-info/
 .installed.cfg
-*.egg
-
-# UV / Pip
-uv.lock
-
-# IDEs
 .idea/
 .vscode/
 *.swp
