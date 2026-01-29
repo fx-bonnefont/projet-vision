@@ -1,2 +1,11 @@
-transformers>=4.30.0
+transformers>=4.56.0
 huggingface_hub
+psutil
+tqdm
+matplotlib
+torch
+torchvision
+opencv-python
+pillow
+numpy
+python-dotenv

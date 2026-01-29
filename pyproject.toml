@@ -10,5 +10,12 @@ dependencies = [
     "torch>=2.0.0",
     "torchvision>=0.15.0",
     "pillow>=10.0.0",
-    "transformers>=4.56.0",  # For SAM3 backbone and DINOv3
+    "transformers>=4.56.0",
+    "psutil",
+    "tqdm",
+    "matplotlib",
+    "python-dotenv",
 ]
+
+[tool.setuptools]
+packages = ["segmentation"]

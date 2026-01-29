@@ -42,3 +42,4 @@ data/
 DOTA/
 images/
 labels/
+.env

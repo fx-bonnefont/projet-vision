@@ -10,6 +10,7 @@ import torch.nn as nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
+from dotenv import load_dotenv
 
 from segmentation import (
     list_backbones,
@@ -22,6 +23,22 @@ from segmentation import (
     SystemLogger
 )
 
+# Load environment variables from .env file
+load_dotenv()
+
+def authenticate_huggingface():
+    """Authenticate with Hugging Face if HF_TOKEN is provided in .env."""
+    token = os.getenv("HF_TOKEN")
+    if token:
+        try:
+            from huggingface_hub import login
+            login(token=token)
+            print("Successfully authenticated with Hugging Face.")
+        except Exception as e:
+            print(f"⚠️ Hugging Face authentication failed: {e}")
+    else:
+        print("💡 No HF_TOKEN found in .env. Gated models might fail to load.")
+
 def train(
     image_dir: str,
     label_dir: str,
@@ -32,12 +49,16 @@ def train(
     epochs: int = 20,
     batch_size: int = 4,
     cache_data: bool = False,
+    img_size: int | None = None,
     lr: float = 1e-3,
     class_weight_factor: float = 1.0, # Not strictly used as pos_weight anymore, but maybe for boost
     unfreeze_backbone: bool = False,
     device: str | None = None
 ):
     """Train the multi-class segmentation model."""
+    
+    # 0. Authenticate with Hugging Face
+    authenticate_huggingface()
 
     # Auto-detect device
     if device is None:
@@ -77,8 +98,11 @@ def train(
         print("Aborting training to save time.")
         exit(1)
     # -----------------------------------------------------
-
-    img_size = get_image_size(backbone_name)
+    
+    # Use provided img_size or fallback to backbone default
+    if img_size is None:
+        img_size = get_image_size(backbone_name)
+    print(f"Training with crop size: {img_size}x{img_size}")
 
     # Create train dataloader
     train_dataloader = get_dataloader(
@@ -265,6 +289,8 @@ if __name__ == '__main__':
                         help='Number of training epochs')
     parser.add_argument('--batch-size', type=int, default=16,
                         help='Batch size')
+    parser.add_argument('--img-size', type=int, default=None,
+                        help='Image crop size (default: backbone specific)')
     parser.add_argument('--cache', action='store_true',
                         help='Cache all data in RAM')
     parser.add_argument('--lr', type=float, default=1e-3,
@@ -306,6 +332,7 @@ if __name__ == '__main__':
         backbone_name=args.backbone,
         epochs=args.epochs,
         batch_size=args.batch_size,
+        img_size=args.img_size,
         cache_data=args.cache,
         lr=args.lr,
         class_weight_factor=args.pos_weight,
