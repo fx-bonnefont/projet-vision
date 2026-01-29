@@ -29,6 +29,12 @@ load_dotenv()
 def authenticate_huggingface():
     """Authenticate with Hugging Face if HF_TOKEN is provided in .env."""
     token = os.getenv("HF_TOKEN")
+    if token:
+        try:
+            from huggingface_hub import login
+            login(token=token)
+        except Exception:
+            pass
     else:
         print("💡 No HF_TOKEN found. Gated models might fail to load.")
 
@@ -53,23 +59,43 @@ def train(
     # 0. Authenticate with Hugging Face
     authenticate_huggingface()
 
+    # Create dataloaders
+    if img_size is None:
+        img_size = get_image_size(backbone_name)
+    
+    train_dataloader = get_dataloader(
+        image_dir=image_dir, label_dir=label_dir, img_size=img_size,
+        batch_size=batch_size, shuffle=True, num_workers=0, cache=cache_data
+    )
+    val_dataloader = None
+    if val_image_dir and val_label_dir:
+        val_dataloader = get_dataloader(
+            image_dir=val_image_dir, label_dir=val_label_dir, img_size=img_size,
+            batch_size=batch_size, shuffle=False, num_workers=0, cache=cache_data
+        )
+
+    # Create model
+    model = build_model(backbone_name=backbone_name, device=device)
+    trainable_params = list(model.head.parameters())
+    if unfreeze_backbone:
+        if hasattr(model.backbone, 'model'):
+             for param in model.backbone.model.parameters(): param.requires_grad = True
+             trainable_params += list(model.backbone.model.parameters())
+        elif hasattr(model.backbone, 'features'):
+             for param in model.backbone.features.parameters(): param.requires_grad = True
+             trainable_params += list(model.backbone.features.parameters())
+
     print(f"🚀 Training {backbone_name} on {device} ({len(DOTA_CLASSES)} classes)")
+    print(f"📦 Crop: {img_size}x{img_size} | Batch: {batch_size} | Params: {sum(p.numel() for p in trainable_params):,}")
 
     # Sanity check
     try:
-        dummy_model = build_model(backbone_name, device)
-        dummy_size = get_image_size(backbone_name)
-        dummy_in = torch.randn(1, len(DOTA_CLASSES), dummy_size, dummy_size).to(device) # This dummy check had an error in logic (dummy_in should be 3 channels), but I will fix and keep it quiet
-        # Fix logic for dummy in
-        dummy_in = torch.randn(1, 3, dummy_size, dummy_size).to(device)
+        dummy_in = torch.randn(1, 3, img_size, img_size).to(device)
         with torch.no_grad():
-            dummy_model(dummy_in)
-        del dummy_model, dummy_in
+            model(dummy_in)
     except Exception as e:
         print(f"❌ Sanity check failed: {e}")
         exit(1)
-    
-    print(f"📦 Crop: {img_size}x{img_size} | Batch: {batch_size} | Params: {sum(p.numel() for p in trainable_params):,}")
     
     criterion = nn.CrossEntropyLoss(weight=torch.tensor([0.1] + [1.0]*(len(DOTA_CLASSES)-1)).to(device))
 
@@ -179,6 +205,8 @@ def train(
         tqdm.write(f"Epoch {epoch + 1}/{epochs} - Train Loss: {avg_train_loss:.4f}{val_info}")
 
         # Save best model
+        if val_dataloader and avg_val_loss < min_val_loss:
+            min_val_loss = avg_val_loss
             best_model_path = output_path.replace('.pth', '_best.pth')
             os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
             save_model(model, best_model_path)

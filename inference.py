@@ -285,6 +285,21 @@ def run_inference(
 
         prob_mask, pred_mask = predict(model, image_rgb, img_size, device)
 
+        bboxes = extract_bboxes(pred_mask, image.shape[0], image.shape[1])
+        
+        # Try to find debug image (Ground Truth)
+        debug_dir_path = img_path.parent.as_posix().replace('/images/', '/outputs/debug/')
+        debug_path = Path(debug_dir_path) / f"visu_{img_path.name}"
+        
+        debug_image = None
+        if debug_path.exists():
+            debug_image = cv2.imread(str(debug_path))
+        else:
+             # Fallback
+            debug_path_noprefix = Path(debug_dir_path) / img_path.name
+            if debug_path_noprefix.exists():
+                 debug_image = cv2.imread(str(debug_path_noprefix))
+
         output_path = output_dir / f"pred_{img_path.stem}.png"
         visualize(image_rgb, prob_mask, pred_mask, bboxes, str(output_path), debug_image)
 
