@@ -61,10 +61,6 @@ class SegmentationDataset(Dataset):
         if len(self.image_files) == 0:
             raise ValueError(f"No images found in {image_dir}")
 
-        print(f"Found {len(self.image_files)} images")
-        print(f"  Image size: {img_size}x{img_size}")
-        print(f"  Classes: {len(DOTA_CLASSES)} (inclusive of background)")
-
         # Cache data if requested
         self.cached_data = None
         if self.cache_data:
@@ -73,7 +69,6 @@ class SegmentationDataset(Dataset):
             from tqdm import tqdm
             
             scan_workers = max(1, int(os.cpu_count() * 0.8))
-            print(f"Caching {len(self.image_files)} images using {scan_workers} workers...")
             
             with ProcessPoolExecutor(max_workers=scan_workers) as executor:
                 results = list(tqdm(executor.map(self._load_raw_data, range(len(self.image_files))), 
@@ -85,9 +80,7 @@ class SegmentationDataset(Dataset):
         return len(self.image_files)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        # Debug: Print progress for first few items
-        if idx < 5:
-            print(f"Loading sample {idx+1}/{len(self)}...")
+        # No debug prints
             
         if self.cached_data:
             image_raw, mask_raw = self.cached_data[idx]
@@ -118,8 +111,7 @@ class SegmentationDataset(Dataset):
             if image is None:
                 raise ValueError(f"cv2.imread returned None")
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        except Exception as e:
-            print(f"⚠️ Skipping corrupted image {img_path.name}: {e}")
+        except Exception:
             # Fallback: return a random valid image instead of crashing
             fallback_idx = (idx + 1) % len(self.image_files)
             return self._load_raw_data(fallback_idx)

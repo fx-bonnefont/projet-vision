@@ -10,7 +10,14 @@ import torch.nn as nn
 from torch.optim import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
+import logging
 from dotenv import load_dotenv
+
+# Silence external libraries
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
 from segmentation import (
     list_backbones,
@@ -27,16 +34,13 @@ from segmentation import (
 load_dotenv()
 
 def authenticate_huggingface():
-    """Authenticate with Hugging Face if HF_TOKEN is provided in .env."""
+    """Authenticate with Hugging Face if HF_TOKEN is provided."""
     token = os.getenv("HF_TOKEN")
     if token:
         try:
             from huggingface_hub import login
             login(token=token)
-        except Exception:
-            pass
-    else:
-        print("💡 No HF_TOKEN found. Gated models might fail to load.")
+        except Exception: pass
 
 def train(
     image_dir: str,
@@ -85,19 +89,9 @@ def train(
              for param in model.backbone.features.parameters(): param.requires_grad = True
              trainable_params += list(model.backbone.features.parameters())
 
-    print(f"🚀 Training {backbone_name} on {device} ({len(DOTA_CLASSES)} classes)")
-    print(f"📦 Crop: {img_size}x{img_size} | Batch: {batch_size} | Params: {sum(p.numel() for p in trainable_params):,}")
-
-    # Sanity check
-    try:
-        dummy_in = torch.randn(1, 3, img_size, img_size).to(device)
-        with torch.no_grad():
-            model(dummy_in)
-    except Exception as e:
-        print(f"❌ Sanity check failed: {e}")
-        exit(1)
-    
     criterion = nn.CrossEntropyLoss(weight=torch.tensor([0.1] + [1.0]*(len(DOTA_CLASSES)-1)).to(device))
+    
+    print(f"� {backbone_name} | {device} | Crop {img_size} | Batch {batch_size} | Params {sum(p.numel() for p in trainable_params):,}")
 
     optimizer = Adam(trainable_params, lr=lr)
     

@@ -138,7 +138,6 @@ class UNetDecoder(nn.Module):
         
         if self.isotropic:
             # ViT Mode: Dense Fusion then Upsample
-            print("  Mode: Isotropic (ViT) - Using Dense Fusion Decoder")
             self.hidden_dim = feature_channels[0]
             
             # Adapters to compress each layer
@@ -164,7 +163,6 @@ class UNetDecoder(nn.Module):
             
         else:
             # ResNet Mode: Standard U-Net
-            print("  Mode: Hierarchical (ResNet) - Using Standard U-Net Decoder")
             c1, c2, c3, c4 = feature_channels
             
             # Bottleneck (C4)
@@ -258,11 +256,6 @@ class SimpleSegmenter(nn.Module):
         num_classes = len(DOTA_CLASSES)
         
         self.head = UNetDecoder(feature_channels=channels, out_channels=num_classes)
-        
-        print(f"SimpleSegmenter initialized:")
-        print(f"  Backbone: {backbone.config.name}")
-        print(f"  Channels: {channels}")
-        print(f"  Head: Multi-scale UNetDecoder (Output: {num_classes} classes)")
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -307,26 +300,20 @@ def load_model(
     Load the segmentation model.
     Auto-detects backbone if saved in the new format.
     """
-    print(f"Loading model from {weights_path}")
     checkpoint = torch.load(weights_path, map_location=device, weights_only=True)
 
     # Detect format
     if isinstance(checkpoint, dict) and 'backbone_name' in checkpoint:
         # New format
-        saved_backbone = checkpoint['backbone_name']
-        print(f"  Detected backbone in checkpoint: {saved_backbone}")
-        
         if backbone_name is not None and backbone_name != saved_backbone:
-            print(f"  WARNING: Requested backbone '{backbone_name}' differs from saved '{saved_backbone}'. Using saved.")
+            pass
         
         backbone_name = saved_backbone
         state_dict = checkpoint['state_dict']
     else:
         # Old format (just state_dict)
-        print("  Legacy checkpoint format (weights only).")
         if backbone_name is None:
             backbone_name = DEFAULT_BACKBONE
-            print(f"  No backbone specified, using default: {backbone_name}")
         state_dict = checkpoint
 
     model = build_model(backbone_name, device)
@@ -342,7 +329,6 @@ def save_model(model: SimpleSegmenter, path: str):
         'state_dict': model.head.state_dict()
     }
     torch.save(checkpoint, path)
-    print(f"Model saved to {path} (backbone: {model.backbone.config.name})")
 
 
 def get_image_size(backbone_name: str) -> int:

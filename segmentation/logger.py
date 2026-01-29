@@ -26,7 +26,7 @@ class SystemLogger:
             writer = csv.writer(f)
             writer.writerow(self.headers)
             
-        print(f"SystemLogger initialized. Logging to: {self.log_file}")
+        # Silence setup
         
     def log_batch(self, 
                   epoch: int, 

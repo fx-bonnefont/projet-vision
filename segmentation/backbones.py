@@ -66,12 +66,7 @@ class DINOv2Backbone(BaseBackbone):
 
     def __init__(self, model_name: str = 'dinov2_vits14'):
         super().__init__(self.CONFIGS[model_name])
-        # Force loading output_hidden_states is hard with torch.hub generally, 
-        # normally it just returns last layer. 
-        # For DINOv2 hub model, forward_features returns a dict.
-        # It's harder to get intermediates easily without hacking. 
-        # For now, we return a list with ONE element for DINOv2 to match interface.
-        print(f"Loading {model_name} via torch.hub...")
+        # Force loading output_hidden_states is hard with torch.hub generally,
         self.model = torch.hub.load('facebookresearch/dinov2', model_name)
         for param in self.model.parameters(): param.requires_grad = False
         self.model.eval()
@@ -115,7 +110,6 @@ class DINOv3Backbone(BaseBackbone):
         config = BackboneConfig(model_name, patch_size=16, hidden_size=hidden_size, num_register_tokens=4)
         super().__init__(config)
         
-        print(f"Loading DINOv3 from HuggingFace ({model_id})...")
         from transformers import AutoModel
         self.model = AutoModel.from_pretrained(model_id)
         
@@ -131,8 +125,6 @@ class DINOv3Backbone(BaseBackbone):
             
         if real_hidden_size != hidden_size:
             self.config.hidden_size = real_hidden_size
-        
-        print(f"  DINOv3 loaded: hidden_size={self.config.hidden_size}")
 
     def extract_features(self, x: torch.Tensor) -> list[torch.Tensor]:
         """
@@ -186,7 +178,6 @@ class SAM3Backbone(BaseBackbone):
     def __init__(self, model_id: str = "facebook/sam3"):
         config = BackboneConfig('sam3', patch_size=14, hidden_size=256) 
         super().__init__(config)
-        print(f"Loading SAM3...")
         from transformers import Sam3Model
         self.model = Sam3Model.from_pretrained(model_id)
         for param in self.model.parameters(): param.requires_grad = False
