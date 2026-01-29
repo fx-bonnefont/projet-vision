@@ -31,12 +31,9 @@ wheels/
 # OS
 .DS_Store
 
-# Project specific
-checkpoints/
-logs/
-inference_output/
-*.pth
-*.csv
+# Project outputs
+outputs/
+
 # Data (assuming data is external, but just in case)
 data/
 DOTA/

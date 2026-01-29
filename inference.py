@@ -245,7 +245,7 @@ def visualize(image: np.ndarray, prob_mask: np.ndarray, pred_mask: np.ndarray,
 def run_inference(
     model_path: str,
     image_dir: str,
-    output_dir: str = './inference_output',
+    output_dir: str = './outputs/inference',
     backbone_name: str = DEFAULT_BACKBONE,
     num_images: int = 5,
     threshold: float = 0.5, # Unused in Multi-Class (Using Argmax)
@@ -296,7 +296,7 @@ def run_inference(
         print(f"  Found {len(bboxes)} objects")
 
         # Try to find debug image (Ground Truth)
-        debug_dir_path = img_path.parent.as_posix().replace('/images/', '/debug/')
+        debug_dir_path = img_path.parent.as_posix().replace('/images/', '/outputs/debug/')
         debug_path = Path(debug_dir_path) / f"visu_{img_path.name}"
         
         debug_image = None
@@ -317,11 +317,11 @@ def main():
     parser = argparse.ArgumentParser(description='Run Multi-Class inference')
     parser.add_argument('--data', type=str, default=None,
                         help='Root directory containing "images/test"')
-    parser.add_argument('--model', type=str, default='model.pth',
+    parser.add_argument('--model', type=str, default='outputs/weights/model.pth',
                         help='Path to trained model weights')
     parser.add_argument('--images', type=str, default=None,
                         help='Specific directory containing images')
-    parser.add_argument('--output', type=str, default='./inference_output',
+    parser.add_argument('--output', type=str, default='./outputs/inference',
                         help='Output directory')
     parser.add_argument('--backbone', type=str, default=None,
                         choices=list_backbones(),

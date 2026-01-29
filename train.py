@@ -44,7 +44,7 @@ def train(
     label_dir: str,
     val_image_dir: str | None = None,
     val_label_dir: str | None = None,
-    output_path: str = 'model.pth',
+    output_path: str = 'outputs/weights/model.pth',
     backbone_name: str = DEFAULT_BACKBONE,
     epochs: int = 20,
     batch_size: int = 4,
@@ -164,7 +164,7 @@ def train(
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
     # Initialize Logger
-    logger = SystemLogger(output_dir='logs')
+    logger = SystemLogger(output_dir='outputs/logs')
 
     min_val_loss = float('inf')
 
@@ -267,12 +267,14 @@ def train(
         if val_dataloader and avg_val_loss < min_val_loss:
             min_val_loss = avg_val_loss
             best_model_path = output_path.replace('.pth', '_best.pth')
+            os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
             save_model(model, best_model_path)
             tqdm.write(f"  --> New best model saved! (Val Loss: {min_val_loss:.4f})")
             
         if val_dataloader:
             scheduler.step(avg_val_loss)
 
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     save_model(model, output_path)
     print(f"Training complete! Model saved to {output_path}")
 
@@ -321,7 +323,7 @@ if __name__ == '__main__':
     if args.output is None:
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-        args.output = f"model_{args.backbone}_{timestamp}.pth"
+        args.output = f"outputs/weights/model_{args.backbone}_{timestamp}.pth"
 
     train(
         image_dir=train_images,

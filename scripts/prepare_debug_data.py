@@ -6,7 +6,7 @@ import numpy as np
 # Configuration des dossiers
 IMAGE_DIR = './images'  # Dossier contenant vos .png
 LABEL_DIR = './labels/DOTA-v1.5_train'  # Dossier contenant vos .txt
-OUTPUT_DIR = './debug' # Dossier où seront sauvegardées les images dessinées
+OUTPUT_DIR = './outputs/debug' # Dossier où seront sauvegardées les images dessinées
 
 # Création du dossier de sortie s'il n'existe pas
 if not os.path.exists(OUTPUT_DIR):
