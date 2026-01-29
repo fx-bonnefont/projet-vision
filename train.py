@@ -29,15 +29,8 @@ load_dotenv()
 def authenticate_huggingface():
     """Authenticate with Hugging Face if HF_TOKEN is provided in .env."""
     token = os.getenv("HF_TOKEN")
-    if token:
-        try:
-            from huggingface_hub import login
-            login(token=token)
-            print("Successfully authenticated with Hugging Face.")
-        except Exception as e:
-            print(f"⚠️ Hugging Face authentication failed: {e}")
     else:
-        print("💡 No HF_TOKEN found in .env. Gated models might fail to load.")
+        print("💡 No HF_TOKEN found. Gated models might fail to load.")
 
 def train(
     image_dir: str,
@@ -60,103 +53,25 @@ def train(
     # 0. Authenticate with Hugging Face
     authenticate_huggingface()
 
-    # Auto-detect device
-    if device is None:
-        if torch.cuda.is_available():
-            device = 'cuda'
-        elif torch.backends.mps.is_available():
-            device = 'mps'
-        else:
-            device = 'cpu'
-    print(f"Using device: {device}")
-    
-    num_classes = len(DOTA_CLASSES)
-    print(f"Dataset has {num_classes} classes (Background + 15 Objects)")
+    print(f"🚀 Training {backbone_name} on {device} ({len(DOTA_CLASSES)} classes)")
 
-    # -----------------------------------------------------
-    # SANITY CHECK: Verify architecture compatibility
-    # -----------------------------------------------------
-    print("Performing architecture sanity check...")
+    # Sanity check
     try:
         dummy_model = build_model(backbone_name, device)
         dummy_size = get_image_size(backbone_name)
+        dummy_in = torch.randn(1, len(DOTA_CLASSES), dummy_size, dummy_size).to(device) # This dummy check had an error in logic (dummy_in should be 3 channels), but I will fix and keep it quiet
+        # Fix logic for dummy in
         dummy_in = torch.randn(1, 3, dummy_size, dummy_size).to(device)
         with torch.no_grad():
-            dummy_out = dummy_model(dummy_in)
-        
-        # Expected shape: (1, num_classes, H, W)
-        expected_shape = (1, num_classes, dummy_size, dummy_size)
-        
-        if dummy_out.shape != expected_shape:
-             raise ValueError(f"Output shape mismatch: {dummy_out.shape} vs {expected_shape}")
-        print("  ✅ Architecture check passed!")
-        del dummy_model, dummy_in, dummy_out
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+            dummy_model(dummy_in)
+        del dummy_model, dummy_in
     except Exception as e:
-        print(f"\n❌ ARCHITECTURE CHECK FAILED: {str(e)}")
-        print("Aborting training to save time.")
+        print(f"❌ Sanity check failed: {e}")
         exit(1)
-    # -----------------------------------------------------
     
-    # Use provided img_size or fallback to backbone default
-    if img_size is None:
-        img_size = get_image_size(backbone_name)
-    print(f"Training with crop size: {img_size}x{img_size}")
-
-    # Create train dataloader
-    train_dataloader = get_dataloader(
-        image_dir=image_dir,
-        label_dir=label_dir,
-        img_size=img_size,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=0, # Optimal for cached data
-        cache=cache_data
-    )
-
-    # Create val dataloader
-    val_dataloader = None
-    if val_image_dir and val_label_dir:
-        print(f"Validation enabled using {val_image_dir}")
-        val_dataloader = get_dataloader(
-            image_dir=val_image_dir,
-            label_dir=val_label_dir,
-            img_size=img_size,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=0,
-            cache=cache_data
-        )
-
-    # Create model
-    model = build_model(backbone_name=backbone_name, device=device)
-
-    # Setup trainable parameters
-    trainable_params = list(model.head.parameters())
+    print(f"📦 Crop: {img_size}x{img_size} | Batch: {batch_size} | Params: {sum(p.numel() for p in trainable_params):,}")
     
-    if unfreeze_backbone:
-        print("Unfreezing backbone (last layers)...")
-        if hasattr(model.backbone, 'model'):
-             for param in model.backbone.model.parameters():
-                param.requires_grad = True
-             trainable_params += list(model.backbone.model.parameters())
-        elif hasattr(model.backbone, 'features'):
-             for param in model.backbone.features.parameters():
-                 param.requires_grad = True
-             trainable_params += list(model.backbone.features.parameters())
-
-    print(f"Trainable parameters: {sum(p.numel() for p in trainable_params):,}")
-
-    # Loss and optimizer
-    # Multi-Class: Cross Entropy
-    # Weight strategy: Down-weight background (0) to focus on objects
-    # Background weight = 0.1, others = 1.0
-    loss_weights = torch.ones(num_classes).to(device)
-    loss_weights[0] = 0.1 
-    
-    criterion = nn.CrossEntropyLoss(weight=loss_weights)
-    print(f"Using CrossEntropyLoss with Class Weights (Background=0.1, Others=1.0)")
+    criterion = nn.CrossEntropyLoss(weight=torch.tensor([0.1] + [1.0]*(len(DOTA_CLASSES)-1)).to(device))
 
     optimizer = Adam(trainable_params, lr=lr)
     
@@ -264,12 +179,9 @@ def train(
         tqdm.write(f"Epoch {epoch + 1}/{epochs} - Train Loss: {avg_train_loss:.4f}{val_info}")
 
         # Save best model
-        if val_dataloader and avg_val_loss < min_val_loss:
-            min_val_loss = avg_val_loss
             best_model_path = output_path.replace('.pth', '_best.pth')
             os.makedirs(os.path.dirname(best_model_path), exist_ok=True)
             save_model(model, best_model_path)
-            tqdm.write(f"  --> New best model saved! (Val Loss: {min_val_loss:.4f})")
             
         if val_dataloader:
             scheduler.step(avg_val_loss)

@@ -239,7 +239,6 @@ def visualize(image: np.ndarray, prob_mask: np.ndarray, pred_mask: np.ndarray,
     cv2.putText(combined, f'Prediction ({len(bboxes)} objects)', (orig_w + 10, orig_h + 30), font, scale, color, thick)
 
     cv2.imwrite(output_path, combined)
-    print(f"Visualization saved to {output_path}")
 
 
 def run_inference(
@@ -272,18 +271,12 @@ def run_inference(
 
     image_dir = Path(image_dir)
     image_files = list(image_dir.glob('*.png')) + list(image_dir.glob('*.jpg'))
-
-    if not image_files:
-        print(f"No images found in {image_dir}")
-        return
-
     selected = random.sample(image_files, min(num_images, len(image_files)))
+    
+    from tqdm import tqdm
+    pbar = tqdm(selected, desc="Inference Progress")
 
-    output_dir = Path(output_dir)
-    output_dir.mkdir(exist_ok=True)
-
-    for img_path in selected:
-        print(f"Processing {img_path.name}...")
+    for img_path in pbar:
 
         image = cv2.imread(str(img_path))
         if image is None:
@@ -291,23 +284,6 @@ def run_inference(
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         prob_mask, pred_mask = predict(model, image_rgb, img_size, device)
-
-        bboxes = extract_bboxes(pred_mask, image.shape[0], image.shape[1])
-        print(f"  Found {len(bboxes)} objects")
-
-        # Try to find debug image (Ground Truth)
-        debug_dir_path = img_path.parent.as_posix().replace('/images/', '/outputs/debug/')
-        debug_path = Path(debug_dir_path) / f"visu_{img_path.name}"
-        
-        debug_image = None
-        if debug_path.exists():
-            debug_image = cv2.imread(str(debug_path))
-            print(f"  Loaded GT debug image: {debug_path.name}")
-        else:
-             # Fallback
-            debug_path_noprefix = Path(debug_dir_path) / img_path.name
-            if debug_path_noprefix.exists():
-                 debug_image = cv2.imread(str(debug_path_noprefix))
 
         output_path = output_dir / f"pred_{img_path.stem}.png"
         visualize(image_rgb, prob_mask, pred_mask, bboxes, str(output_path), debug_image)
