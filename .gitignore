@@ -23,6 +23,7 @@ segdata/
 web_pth/
 dinov3/
 *.pth
+*.csv
 
 # macOS
 .DS_Store
