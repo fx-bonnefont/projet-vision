@@ -2,18 +2,34 @@
 __pycache__/
 *.py[cod]
 *.so
-.venv
+
+# Virtual Environment
+.venv/
+venv/
+
+# Environment Variables
 .env
 
-# System
+# System Files
 .DS_Store
 ._*
 
-# Project Outputs
+# Training Outputs (generated, not versioned)
 runs/
-outputs/
-inference_results/
-debug_vis/
+logs/
 
-# Data (Symlinks or folders)
+# Inference Results (generated, not versioned)
+inference_results/
+inference_full_results/
+
+# Data Directories
 segdata/
+
+# Model Weights and Checkpoints (too large)
+*.pth
+*.pt
+
+# Agents
+.claude/
+CLAUDE.md
+GEMINI.md
