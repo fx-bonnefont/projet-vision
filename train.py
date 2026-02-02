@@ -122,23 +122,51 @@ def main():
         batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers
     )
 
+    # Metadata for CSV Header
+    backbone_name = DINOV3_MODELS[args.model_size]
+    decoder_info = "Heavy UNet (512ch bottleneck, 3 ResBlocks) + Pyramid Input Injection"
+    dataset_info = f"{len(train_loader.dataset)} training tiles (from PreTiledDataset 512x512)"
+    optim_info = f"AdamW (lr={args.lr}, weight_decay=1e-4) + CosineAnnealingLR"
+    loss_info = "ComboLoss (0.5 * BCEWithLogits + 0.5 * DiceLoss)"
+    
+    # Logging Init with Detailed Header
     with open(csv_path, "w") as f:
-        f.write("epoch,train_loss,val_loss,val_dice,val_iou,grad_norm,weight_norm,lr,time\n")
+        f.write(f"# SegDino Training Log\n")
+        f.write(f"# Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"# Run ID: {run_id}\n")
+        f.write(f"# ------------------------------------------------\n")
+        f.write(f"# Model Architecture:\n")
+        f.write(f"#   Backbone: {backbone_name} (Frozen)\n")
+        f.write(f"#   Decoder:  {decoder_info}\n")
+        f.write(f"# Data & Training:\n")
+        f.write(f"#   Dataset:  {dataset_info}\n")
+        f.write(f"#   Epochs:   {args.epochs}\n")
+        f.write(f"#   Batch:    {args.batch_size}\n")
+        f.write(f"#   Optimizer:{optim_info}\n")
+        f.write(f"#   Loss:     {loss_info}\n")
+        f.write(f"# ------------------------------------------------\n")
+        f.write("epoch,train_loss,val_loss,val_dice,val_iou,grad_norm,weight_norm,lr,duration,total_duration\n")
 
     best_iou = 0.0
+    total_duration = 0.0
+    
     for epoch in range(1, args.epochs + 1):
         start = time.time()
+        
         t_loss, t_dice, t_iou, t_grad, t_weight = train_epoch(model, train_loader, optimizer, device)
         v_loss, v_dice, v_iou = evaluate(model, val_loader, device)
+        
         scheduler.step()
-        
         current_lr = optimizer.param_groups[0]["lr"]
-        duration = time.time() - start
         
-        print(f"Epoch {epoch}/{args.epochs} | Loss: {t_loss:.4f} | IoU: {v_iou:.4f} | Grad: {t_grad:.2f} | LR: {current_lr:.2e}")
+        duration = time.time() - start
+        total_duration += duration
+        
+        # Log
+        print(f"Epoch {epoch}/{args.epochs} | Loss: {t_loss:.4f} | IoU: {v_iou:.4f} | Grad: {t_grad:.2f} | Time: {duration:.1f}s")
         
         with open(csv_path, "a") as f:
-            f.write(f"{epoch},{t_loss:.4f},{v_loss:.4f},{v_dice:.4f},{v_iou:.4f},{t_grad:.4f},{t_weight:.4f},{current_lr:.2e},{duration:.1f}\n")
+            f.write(f"{epoch},{t_loss:.4f},{v_loss:.4f},{v_dice:.4f},{v_iou:.4f},{t_grad:.4f},{t_weight:.4f},{current_lr:.2e},{duration:.1f},{total_duration:.1f}\n")
 
         if v_iou > best_iou:
             best_iou = v_iou

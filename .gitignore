@@ -1,32 +1,19 @@
-# Environment variables (contains secrets)
-.env
-
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
 *.so
-.Python
-.venv/
-venv/
-ENV/
+.venv
+.env
 
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Project specific
-runs/
-segdata/
-web_pth/
-dinov3/
-*.pth
-*.csv
-
-# macOS
+# System
 .DS_Store
+._*
 
-# uv
-uv.lock
+# Project Outputs
+runs/
+outputs/
+inference_results/
+debug_vis/
+
+# Data (Symlinks or folders)
+segdata/
