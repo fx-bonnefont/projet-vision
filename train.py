@@ -88,6 +88,7 @@ def evaluate(model, loader, device):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", default="/Volumes/X9Pro/DOTA_PLANES_TILED")
+    parser.add_argument("--model_size", default="1", choices=["1", "2", "3", "4", "5"])
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=5e-4)
