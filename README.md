@@ -139,197 +139,52 @@ python train.py \
 
 ### Multi-GPU Training (SLURM Cluster)
 
-The code automatically detects and uses DistributedDataParallel (DDP) when run via SLURM.
+This project is configured to run on the SLURM cluster described in `CLUSTER.md`. The `train_ddp.sh` script is designed to be autonomous, handling environment setup automatically.
 
-#### Quick Start
+#### 1. Interactive Test (Recommended First Step)
 
+Before submitting a long training job, it's best to run a quick test in an interactive session on a compute node.
+
+**a. Request an interactive session with one GPU:**
 ```bash
-# 1. Verify setup
-python verify_setup.py
+# On the cluster gateway (gpu-gw)
+sinteractive --partition=3090 --gres=gpu:1 --time=01:00:00
+```
 
-# 2. Test on single GPU (optional)
-./test_single_gpu.sh
+**b. Once on the compute node, run a quick training test:**
+```bash
+# cd to the project directory
+# Make sure your environment is activated: source .venv/bin/activate
+python train.py --model_size vit-small --epochs 1 --batch_size 4
+```
+If this command completes without error, your setup is correct. You can then `exit` the interactive session.
 
-# 3. Edit DATA_DIR in train_ddp.sh (line 72)
-nano train_ddp.sh
+#### 2. Submit a Batch Training Job
 
-# 4. Submit to cluster
+To run a full training, submit the `train_ddp.sh` script to the SLURM scheduler.
+
+**a. Launch with default parameters (vit-large, 25 epochs):**
+```bash
 sbatch train_ddp.sh
-
-# 5. Monitor progress
-tail -f logs/slurm_<JOB_ID>.out
 ```
 
-#### Custom Parameters
+**b. Launch with custom parameters:**
 
+You can override variables like `MODEL_SIZE` and `EPOCHS` directly with `--export`.
 ```bash
-# vit-large with 16 batch per GPU (32 effective)
-sbatch --export=ALL,MODEL_SIZE=vit-large,BATCH_SIZE=16,EPOCHS=25,DATA_DIR=/your/data/path train_ddp.sh
-
-# vit-large-sat (satellite-pretrained)
-sbatch --export=ALL,MODEL_SIZE=vit-large-sat,BATCH_SIZE=16,EPOCHS=25,DATA_DIR=/your/data/path train_ddp.sh
+# Example: Train vit-base for 100 epochs
+sbatch --export=ALL,MODEL_SIZE=vit-base,EPOCHS=100 train_ddp.sh
 ```
 
-#### Memory Estimates (2x NVIDIA 3090, 24GB each)
-
-| Model | Batch/GPU | Effective Batch | VRAM/GPU | Status |
-|-------|-----------|-----------------|----------|--------|
-| vit-large | 16 | 32 | ~18-20GB | Safe |
-| vit-large | 20 | 40 | ~22-23GB | Tight |
-| vit-large-sat | 16 | 32 | ~18-20GB | Safe |
-| vit-huge | 8 | 16 | ~18-20GB | Safe |
-| vit-huge | 12 | 24 | ~23-24GB | Tight |
-
-**Recommended**: Use `--batch_size 16` for vit-large/vit-large-sat on 3090s.
-
-#### Expected Training Time
-
-With 2x 3090 and vit-large:
-- **Per epoch**: ~10-15 minutes (depends on dataset size)
-- **25 epochs**: ~4-6 hours
-
----
-
-## Training Outputs
-
-All outputs are saved to `runs/`:
-
-```
-runs/
-├── 20260202_15_a3f4_best.pth    # Best model checkpoint
-└── 20260202_15_a3f4_log.csv     # Training log with metadata
-```
-
-### CSV Log Format
-
-Each log includes:
-- **Metadata header** (commented lines): model config, batch size, num GPUs, etc.
-- **Per-epoch metrics**: train_loss, val_loss, val_dice, val_iou, grad_norm, weight_norm, lr, duration
-
-**View final metrics:**
+#### 3. Monitor the Job
+Use standard SLURM commands to monitor your job.
 ```bash
-grep -v "^#" runs/<RUN_ID>_log.csv | tail -1
-```
+# See your running/pending jobs
+squeue --me
 
----
-
-## Inference
-
-The `inference.py` script performs inference on full-size images using a sliding window approach with Gaussian blending to produce smooth predictions. It generates a side-by-side visualization comparing the ground truth bounding boxes (left, green) with the predicted bounding boxes (right, orange).
-
-```bash
-python inference.py \
-    --ckpt runs/YOUR_RUN_ID_best.pth \
-    --model_size vit-base \
-    --save_dir inference_results \
-    --limit 10
-```
-
-- `--limit`: (Optional) Restricts the number of images to process.
-- The script automatically handles finding `image`/`images` and `mask`/`masks` subdirectories based on its default path.
-
----
-
-## Multi-GPU Implementation Details
-
-### How DDP Works
-
-The training script automatically detects distributed mode via environment variables:
-
-**Supported Launchers:**
-- SLURM: via `srun` (detects `SLURM_PROCID`)
-- torchrun: `torchrun --nproc_per_node=2 train.py ...`
-- Single GPU: Falls back automatically if no DDP env vars found
-
-**Key Features:**
-- **Automatic detection**: No `--distributed` flag needed
-- **Data sharding**: DistributedSampler splits dataset across GPUs (no overlap)
-- **Gradient sync**: DDP automatically averages gradients during backward()
-- **Metric averaging**: `dist.all_reduce()` averages metrics across all ranks
-- **Single checkpoint**: Only rank 0 saves models and logs
-
-**Effective Batch Size:**
-```
-Effective Batch = batch_size × num_gpus
-```
-
-Example: `--batch_size 16` with 2 GPUs = **32 effective batch size**
-
-### SLURM Script Configuration
-
-Edit `train_ddp.sh` before submitting:
-
-**Line 10** - Adjust GPU partition name:
-```bash
-#SBATCH --partition=gpu  # Change to your cluster's partition name
-```
-
-**Line 72** - Set data directory:
-```bash
-DATA_DIR=${DATA_DIR:-"/actual/path/to/DOTA_PLANES_TILED"}
-```
-
-**Line 55** - Load CUDA module (if required by cluster):
-```bash
-module load cuda/11.8  # Uncomment and adjust version
-```
-
----
-
-## Troubleshooting
-
-### Job Fails on Cluster
-
-```bash
-# Check error log
-cat logs/slurm_<JOB_ID>.err
-
-# Common issues:
-# 1. Data path wrong -> verify DATA_DIR in train_ddp.sh
-# 2. CUDA module not loaded -> uncomment module load in train_ddp.sh
-# 3. Virtual environment missing -> create .venv on cluster
-```
-
-### Out of Memory
-
-Reduce batch size:
-```bash
-sbatch --export=ALL,BATCH_SIZE=12,... train_ddp.sh
-```
-
-### Slow Data Loading
-
-If data is on network storage:
-```bash
-sbatch --export=ALL,NUM_WORKERS=4,... train_ddp.sh
-```
-
-### Training Diverges
-
-Check gradient norms in CSV log:
-```bash
-grep -v "^#" runs/<RUN_ID>_log.csv | awk -F, '{print $6}' | tail -10
-```
-
-If grad_norm > 100, reduce learning rate.
-
----
-
-## Comparing Models
-
-To compare vit-large vs vit-large-sat:
-
-```python
-import pandas as pd
-
-# Load logs
-df_large = pd.read_csv('runs/<RUN_ID_large>_log.csv', comment='#')
-df_sat = pd.read_csv('runs/<RUN_ID_sat>_log.csv', comment='#')
-
-# Compare final IoU
-print(f"vit-large:     {df_large['val_iou'].iloc[-1]:.4f}")
-print(f"vit-large-sat: {df_sat['val_iou'].iloc[-1]:.4f}")
-print(f"Improvement:   {(df_sat['val_iou'].iloc[-1] - df_large['val_iou'].iloc[-1]):.4f}")
+# Follow the output log in real-time
+# (The job ID is shown after you run sbatch)
+tail -f logs/slurm_[JOB_ID].out
 ```
 
 ---

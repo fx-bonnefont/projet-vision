@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=8             # CPUs per task (for data loading)
 #SBATCH --mem=64G                     # Total memory
 #SBATCH --time=24:00:00               # Max runtime (24 hours)
-#SBATCH --partition=gpu               # GPU partition (adjust to your cluster)
+#SBATCH --partition=3090              # GPU partition for NVIDIA 3090 GPUs
 
 # ============================================
 # SLURM Job Configuration for SegDino DDP Training
@@ -43,13 +43,13 @@ mkdir -p logs
 # Environment Setup
 # ============================================
 
-# Load modules (adjust for your cluster)
-# Example: module load cuda/11.8 python/3.10
-# Uncomment and modify as needed:
-# module load cuda/11.8
-# module load python/3.10
+# 1. Configure CUDA Environment
+# This cluster uses `export` instead of `module load`.
+echo "Configuring CUDA 11.6 environment..."
+export PATH=/usr/local/cuda-11.6/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/cuda-11.6/lib64:$LD_LIBRARY_PATH
 
-# Activate or create virtual environment
+# 2. Activate or create Python virtual environment
 if [ ! -d ".venv" ]; then
     echo "Virtual environment not found. Creating with uv..."
     # Ensure python3.12 is available or adjust python version
