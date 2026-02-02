@@ -1,4 +1,6 @@
-"SegDino Training Script."
+"""
+SegDino Training Script (Simplified).
+"""
 import argparse
 import os
 import random
@@ -21,28 +23,42 @@ def calculate_metrics(pred, target):
     pred = (torch.sigmoid(pred) > 0.5).float()
     inter = (pred * target).sum()
     union = pred.sum() + target.sum()
-    
     dice = (2 * inter / (union + 1e-6)).item()
-    iou = (inter / (union - inter + 1e-6)).item() # Correct IoU: I / (A+B-I)
+    iou = (inter / (union - inter + 1e-6)).item()
     return dice, iou
 
-def train_epoch(model, loader, optimizer, device, accum_iter):
+def get_model_stats(model):
+    """Computes L2 norm of weights and gradients."""
+    total_norm = 0.0
+    weight_norm = 0.0
+    for p in model.parameters():
+        if p.grad is not None:
+            total_norm += p.grad.data.norm(2).item() ** 2
+        if p.data is not None:
+            weight_norm += p.data.norm(2).item() ** 2
+    return total_norm ** 0.5, weight_norm ** 0.5
+
+def train_epoch(model, loader, optimizer, device):
     model.train()
     criterion = ComboLoss().to(device)
     total_loss, total_dice, total_iou = 0, 0, 0
-    optimizer.zero_grad()
+    total_grad_norm, total_weight_norm = 0, 0
 
-    for i, (imgs, masks, _) in enumerate(tqdm(loader, desc="Train")):
+    for imgs, masks, _ in tqdm(loader, desc="Train"):
         imgs, masks = imgs.to(device), masks.to(device)
         
+        optimizer.zero_grad()
         logits = model(imgs)
         loss = criterion(logits, masks)
+        loss.backward()
         
-        (loss / accum_iter).backward()
+        # Stats
+        grad_norm, weight_norm = get_model_stats(model)
+        total_grad_norm += grad_norm
+        total_weight_norm += weight_norm
         
-        if (i + 1) % accum_iter == 0:
-            optimizer.step()
-            optimizer.zero_grad()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+        optimizer.step()
             
         dice, iou = calculate_metrics(logits, masks)
         total_loss += loss.item()
@@ -50,7 +66,7 @@ def train_epoch(model, loader, optimizer, device, accum_iter):
         total_iou += iou
 
     n = len(loader)
-    return total_loss / n, total_dice / n, total_iou / n
+    return total_loss / n, total_dice / n, total_iou / n, total_grad_norm / n, total_weight_norm / n
 
 @torch.no_grad()
 def evaluate(model, loader, device):
@@ -73,15 +89,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", default="/Volumes/X9Pro/DOTA_PLANES_TILED")
     parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--accum_iter", type=int, default=8)
-    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--num_workers", type=int, default=8)
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
-    # Setup
-    torch.manual_seed(42)
-    random.seed(42)
+    torch.manual_seed(args.seed)
+    random.seed(args.seed)
     run_id = generate_run_id()
     
     log_dir = "runs"
@@ -91,14 +106,12 @@ def main():
 
     print(f"--- SegDino Run: {run_id} ---")
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-    print(f"Device: {device} | Batch (Eff): {args.batch_size*args.accum_iter}")
+    print(f"Device: {device} | Batch: {args.batch_size} | LR: {args.lr}")
 
-    # Model
     model = SegDino(model_size="1", freeze_backbone=True).to(device)
     optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
 
-    # Data
     train_loader = torch.utils.data.DataLoader(
         PreTiledDataset(args.data_dir, "train"), 
         batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, drop_last=True
@@ -108,28 +121,24 @@ def main():
         batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers
     )
 
-    # Logging Init
     with open(csv_path, "w") as f:
-        f.write("epoch,train_loss,val_loss,val_dice,val_iou,lr,time\n")
+        f.write("epoch,train_loss,val_loss,val_dice,val_iou,grad_norm,weight_norm,lr,time\n")
 
     best_iou = 0.0
-    
     for epoch in range(1, args.epochs + 1):
         start = time.time()
-        
-        t_loss, t_dice, t_iou = train_epoch(model, train_loader, optimizer, device, args.accum_iter)
+        t_loss, t_dice, t_iou, t_grad, t_weight = train_epoch(model, train_loader, optimizer, device)
         v_loss, v_dice, v_iou = evaluate(model, val_loader, device)
-        
         scheduler.step()
+        
+        current_lr = optimizer.param_groups[0]["lr"]
         duration = time.time() - start
         
-        # Log
-        print(f"Epoch {epoch}/{args.epochs} | Train Loss: {t_loss:.4f} | Val IoU: {v_iou:.4f} | Time: {duration:.1f}s")
+        print(f"Epoch {epoch}/{args.epochs} | Loss: {t_loss:.4f} | IoU: {v_iou:.4f} | Grad: {t_grad:.2f} | LR: {current_lr:.2e}")
         
         with open(csv_path, "a") as f:
-            f.write(f"{epoch},{t_loss:.4f},{v_loss:.4f},{v_dice:.4f},{v_iou:.4f},{optimizer.param_groups[0]['lr']:.2e},{duration:.1f}\n")
+            f.write(f"{epoch},{t_loss:.4f},{v_loss:.4f},{v_dice:.4f},{v_iou:.4f},{t_grad:.4f},{t_weight:.4f},{current_lr:.2e},{duration:.1f}\n")
 
-        # Save Best
         if v_iou > best_iou:
             best_iou = v_iou
             torch.save(model.state_dict(), best_pth_path)
