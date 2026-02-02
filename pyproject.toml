@@ -3,15 +3,18 @@ name = "segdino"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
     "pillow",
     "numpy",
     "opencv-python-headless",
     "tqdm",
-    "torch",
-    "torchvision",
+    "torch>=2.0.0,<2.1.0",
+    "torchvision>=0.15.0,<0.16.0",
     "transformers",
     "python-dotenv",
     "huggingface-hub",
 ]
+
+[tool.uv]
+extra-index-url = ["https://download.pytorch.org/whl/cu118"]
