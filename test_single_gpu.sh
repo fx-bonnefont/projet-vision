@@ -18,7 +18,12 @@ echo "Model: $MODEL_SIZE"
 echo "Epochs: $EPOCHS"
 echo "Data Dir: $DATA_DIR"
 echo "---------------------------------"
+echo "Start time: $(date '+%Y-%m-%d %H:%M:%S')"
+echo ""
 
+START_TIME=$(date +%s)
+
+# Run training with full output visible
 python train.py \
     --model_size "$MODEL_SIZE" \
     --batch_size "$BATCH_SIZE" \
@@ -27,14 +32,20 @@ python train.py \
     --num_workers 2
 
 EXIT_CODE=$?
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME))
+MINUTES=$((DURATION / 60))
+SECONDS=$((DURATION % 60))
 
+echo ""
+echo "================================="
 if [ $EXIT_CODE -eq 0 ]; then
-  echo "================================="
   echo "Test finished successfully!"
+  echo "Duration: ${MINUTES}m ${SECONDS}s"
   echo "================================="
 else
-  echo "================================="
   echo "Test failed with exit code: $EXIT_CODE"
+  echo "Duration: ${MINUTES}m ${SECONDS}s"
   echo "================================="
 fi
 

@@ -49,19 +49,17 @@ echo "Configuring CUDA 11.6 environment..."
 export PATH=/usr/local/cuda-11.6/bin:$PATH
 export LD_LIBRARY_PATH=/usr/local/cuda-11.6/lib64:$LD_LIBRARY_PATH
 
-# 2. Activate or create Python virtual environment
+# 2. Activate Python virtual environment (must be created beforehand)
 if [ ! -d ".venv" ]; then
-    echo "Virtual environment not found. Creating with uv..."
-    # Ensure python3.12 is available or adjust python version
-    uv venv python3.12 .venv
-    echo "Virtual environment created. Installing dependencies with uv..."
-    source .venv/bin/activate
-    uv sync --quiet
-    echo "Dependencies installed."
-else
-    echo "Activating existing virtual environment..."
-    source .venv/bin/activate
+    echo "ERROR: Virtual environment not found at .venv"
+    echo "Please create it first in an interactive session:"
+    echo "  sinteractive --partition=3090 --gres=gpu:1 --time=02:00:00"
+    echo "  cd $(pwd) && uv venv .venv && source .venv/bin/activate && uv sync"
+    exit 1
 fi
+
+echo "Activating existing virtual environment..."
+source .venv/bin/activate
 
 # Verify CUDA is available
 python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}'); print(f'Num GPUs: {torch.cuda.device_count()}')"
