@@ -1,0 +1,31 @@
+# Environment variables (contains secrets)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project specific
+runs/
+segdata/
+web_pth/
+dinov3/
+*.pth
+
+# macOS
+.DS_Store
+
+# uv
+uv.lock

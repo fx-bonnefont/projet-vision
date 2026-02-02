@@ -1,0 +1,6 @@
+# SegDINO Rank 1
+# Run ID: 20260131_13_adb71e28
+# Backbone: facebook/dinov3-vits16-pretrain-lvd1689m
+# Best IoU: 0.1338
+epoch,train_loss,val_loss,dice,iou,epoch_duration,cumulative_duration
+1,0.573274,0.552077,0.218520,0.133823,322.4,322.4
