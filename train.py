@@ -108,7 +108,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Device: {device} | Batch: {args.batch_size} | LR: {args.lr}")
 
-    model = SegDino(model_size="1", freeze_backbone=True).to(device)
+    model = SegDino(model_size=args.model_size, freeze_backbone=True).to(device)
     optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
 
