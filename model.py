@@ -2,7 +2,7 @@
 SegDino Model Architecture.
 
 Backbone: DINOv3 (ViT) - Frozen
-Decoder: Heavy UNet with Pyramid Input Injection
+Decoder: Heavy UNet Decoder
 """
 import os
 import torch
@@ -96,49 +96,39 @@ class ResBlock(nn.Module):
 
 class PyramidUpBlock(nn.Module):
     """
-    Upsampling block with Pyramid Input Injection.
+    Standard convolutional upsampling block for the decoder.
 
     Architecture:
         1. Upsample features (2x)
-        2. Inject SHARP RGB image at new resolution
-        3. Process with Conv + ResBlock
+        2. Process with Conv + ResBlock
     """
 
     def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
         self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         self.conv = nn.Sequential(
-            nn.Conv2d(in_channels + 3, out_channels, 3, padding=1, bias=False),
+            nn.Conv2d(in_channels, out_channels, 3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
             ResBlock(out_channels)
         )
 
-    def forward(self, x: torch.Tensor, rgb_img: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x: Feature map to upsample
-            rgb_img: Full resolution RGB image (will be resized)
+            x: Feature map to upsample and process.
 
         Returns:
-            Upsampled features with RGB injection
+            Upsampled and refined feature map.
         """
-        # 1. Upsample features
         x = self.upsample(x)
-
-        # 2. Resize RGB to match NEW feature resolution
-        _, _, h, w = x.shape
-        rgb_resized = F.interpolate(rgb_img, size=(h, w), mode='bilinear', align_corners=True)
-
-        # 3. Concatenate and process
-        x = torch.cat([x, rgb_resized], dim=1)
         x = self.conv(x)
         return x
 
 
 class SegDino(nn.Module):
     """
-    SegDino: Semantic Segmentation with DINOv3 + Heavy UNet + Pyramid Injection.
+    SegDino: Semantic Segmentation with DINOv3 + Heavy UNet Decoder.
     """
 
     def __init__(
@@ -204,11 +194,11 @@ class SegDino(nn.Module):
         feat = self.project_fuse(fused)
         feat = self.bottleneck(feat)  # Resolution: 1/16
 
-        # Pyramid decoder with RGB injection
-        feat = self.up1(feat, x)  # 1/8
-        feat = self.up2(feat, x)  # 1/4
-        feat = self.up3(feat, x)  # 1/2
-        feat = self.up4(feat, x)  # 1/1
+        # Pure convolutional decoder path
+        feat = self.up1(feat)  # 1/8
+        feat = self.up2(feat)  # 1/4
+        feat = self.up3(feat)  # 1/2
+        feat = self.up4(feat)  # 1/1
 
         # Output
         logits = self.output(feat)

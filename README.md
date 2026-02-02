@@ -1,6 +1,6 @@
 # SegDino: Small Object Segmentation on Satellite Imagery
 
-SegDino is a specialized deep learning model designed for segmenting small objects (e.g., planes) in high-resolution satellite imagery (DOTA dataset). It leverages the power of Self-Supervised Vision Transformers (DINOv3) combined with a custom Heavy U-Net decoder featuring Multi-Scale Input Injection to resolve fine details.
+SegDino is a specialized deep learning model designed for segmenting small objects (e.g., planes) in high-resolution satellite imagery (DOTA dataset). It leverages the power of a frozen Self-Supervised Vision Transformer (DINOv3) backbone combined with a custom Heavy U-Net decoder to resolve fine details from coarse semantic features.
 
 ## Recent Updates
 
@@ -8,14 +8,12 @@ The codebase has been refactored for correctness and maintainability:
 
 1. **Dice Loss Formula**: Corrected mathematical formula. Previous implementation counted intersection twice in the denominator. Now uses correct formula: `Dice = 2 * |A ∩ B| / (|A| + |B|)`
 
-2. **Pyramid Input Injection**: Fixed architecture to inject RGB image AFTER upsampling features (not before), preserving sharp details at each decoder level.
-
-3. **Code Organization**: Created `utils/` package with modular components:
+2. **Code Organization**: Created `utils/` package with modular components:
    - `utils/distributed.py`: DDP utilities for multi-GPU training
    - `utils/metrics.py`: Mathematically correct Dice/IoU metrics
    - `utils/visualization.py`: Inference and visualization helpers
 
-4. **Robustness**: Added bounded retry mechanism in dataset loader to prevent infinite loops on corrupted files.
+3. **Robustness**: Added bounded retry mechanism in dataset loader to prevent infinite loops on corrupted files.
 
 ---
 
@@ -26,10 +24,10 @@ We use Meta's **DINOv3** (ViT-Small/Base/Large/Huge/Giant) as the feature extrac
 - **Why Frozen?** DINOv3 features are robust enough to capture semantic concepts without needing full fine-tuning, which saves VRAM and prevents overfitting on small datasets.
 - **Why ViT?** Transformers offer a global receptive field, crucial for understanding context in large aerial scenes.
 
-### 2. Decoder: Heavy U-Net with Pyramid Input Injection
-Standard decoders (like DPT) fail on small objects because the backbone resolution (1/16) destroys high-frequency details (edges).
-- **Heavy U-Net:** A deep decoder with Residual Blocks at every stage to process complex features.
-- **Pyramid Input Injection:** At each decoder stage, we first upsample features, then inject the raw RGB image at the new resolution. This preserves sharp details that guide precise boundary delineation.
+### 2. Decoder: Heavy U-Net
+The primary challenge is reconstructing high-resolution masks from the coarse (e.g., 1/16) feature map produced by the ViT, which lacks fine spatial details.
+- **Heavy U-Net Decoder:** To solve this, we use a deep and powerful convolutional decoder. It consists of multiple upsampling stages, each containing `ResBlock`s to progressively refine the features and rebuild spatial information.
+- **No Shortcuts:** This decoder architecture is "purist"—it relies **only** on the semantic features from the DINOv3 backbone. It does not receive any "shortcut" connections from the raw input image. This is a deliberate choice to ensure that any analysis performed on the model (e.g., adversarial attacks) is a true test of the backbone's features, not the decoder's ability to leverage raw pixel data.
 
 ### 3. Training Strategy
 - **Offline Tiling:** Large DOTA images are pre-tiled (512x512) to maximize IO throughput.
@@ -46,7 +44,7 @@ segdino/
 ├── train_ddp.sh          # SLURM submission script for multi-GPU
 ├── test_single_gpu.sh    # Quick test script
 ├── verify_setup.py       # Pre-deployment verification
-├── model.py              # SegDino architecture (Heavy UNet + Pyramid Injection)
+├── model.py              # SegDino architecture (Heavy UNet Decoder)
 ├── dataset.py            # Efficient PreTiledDataset loader
 ├── loss.py               # ComboLoss (BCE + Dice) definition
 ├── inference.py          # Unified inference script (sliding window on full images)
