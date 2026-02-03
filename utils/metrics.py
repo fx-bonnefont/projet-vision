@@ -46,20 +46,12 @@ def get_model_stats(model: torch.nn.Module) -> tuple[float, float]:
     """
     Compute L2 norms of gradients and weights.
 
-    Handles both regular and DDP-wrapped models.
-
     Args:
-        model: PyTorch model (can be DDP-wrapped)
+        model: PyTorch model
 
     Returns:
         tuple: (grad_norm, weight_norm) as floats
     """
-    from torch.nn.parallel import DistributedDataParallel as DDP
-
-    # Unwrap DDP if necessary
-    if isinstance(model, DDP):
-        model = model.module
-
     grad_norm_sq = 0.0
     weight_norm_sq = 0.0
 

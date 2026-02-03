@@ -20,7 +20,6 @@ logs/
 
 # Inference Results (generated, not versioned)
 inference_results/
-inference_full_results/
 
 # Data Directories
 segdata/
@@ -29,8 +28,3 @@ segdata/
 *.pth
 *.pt
 
-# Agents
-.claude/
-CLAUDE.md
-GEMINI.md
-CLUSTER.md

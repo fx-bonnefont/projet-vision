@@ -2,44 +2,48 @@
 SegDino Model Architecture.
 
 Backbone: DINOv3 (ViT) - Frozen
-Decoder: Heavy UNet Decoder
+Decoders: Modular (HeavyUNet, Medium, Light)
 """
 import os
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # DINOv3 HuggingFace models
 DINOV3_MODELS = {
-    "vit-small": "facebook/dinov3-vits16-pretrain-lvd1689m",
-    "vit-small-plus": "facebook/dinov3-vits16plus-pretrain-lvd1689m",
-    "vit-base": "facebook/dinov3-vitb16-pretrain-lvd1689m",
-    "vit-large": "facebook/dinov3-vitl16-pretrain-lvd1689m",
-    "vit-huge": "facebook/dinov3-vith16plus-pretrain-lvd1689m",
-    "vit-giant": "facebook/dinov3-vit7b16-pretrain-lvd1689m",
-    "vit-large-sat": "facebook/dinov3-vitl16-pretrain-sat493m",
-    "vit-giant-sat": "facebook/dinov3-vit7b16-pretrain-sat493m",
+    "small": "facebook/dinov3-vits16-pretrain-lvd1689m",
+    "small-plus": "facebook/dinov3-vits16plus-pretrain-lvd1689m",
+    "base": "facebook/dinov3-vitb16-pretrain-lvd1689m",
+    "large": "facebook/dinov3-vitl16-pretrain-lvd1689m",
+    "huge": "facebook/dinov3-vith16plus-pretrain-lvd1689m",
+    "giant": "facebook/dinov3-vit7b16-pretrain-lvd1689m",
+    "large-sat": "facebook/dinov3-vitl16-pretrain-sat493m",
+    "giant-sat": "facebook/dinov3-vit7b16-pretrain-sat493m",
 }
 
 LAYER_INDICES = {
-    "vit-small": [2, 5, 8, 11],           # Small (12 layers)
-    "vit-small-plus": [2, 5, 8, 11],      # Small+ (12 layers)
-    "vit-base": [2, 5, 8, 11],            # Base (12 layers)
-    "vit-large": [5, 11, 17, 23],         # Large (24 layers)
-    "vit-huge": [7, 15, 23, 31],          # Huge+ (32 layers)
-    "vit-giant": [9, 19, 29, 39],         # Giant/7B (40 layers)
-    "vit-large-sat": [5, 11, 17, 23],     # Large SAT (24 layers)
-    "vit-giant-sat": [9, 19, 29, 39],     # Giant SAT (40 layers)
+    "small": [2, 5, 8, 11],           # Small (12 layers)
+    "small-plus": [2, 5, 8, 11],      # Small+ (12 layers)
+    "base": [2, 5, 8, 11],            # Base (12 layers)
+    "large": [5, 11, 17, 23],         # Large (24 layers)
+    "huge": [7, 15, 23, 31],          # Huge+ (32 layers)
+    "giant": [9, 19, 29, 39],         # Giant/7B (40 layers)
+    "large-sat": [5, 11, 17, 23],     # Large SAT (24 layers)
+    "giant-sat": [9, 19, 29, 39],     # Giant SAT (40 layers)
 }
 
+
+# =============================================================================
+# Backbone
+# =============================================================================
 
 class DINOv3Backbone(nn.Module):
     """DINOv3 Vision Transformer backbone."""
 
-    def __init__(self, model_size: str = "vit-base", freeze_backbone: bool = True):
+    def __init__(self, model_size: str = "base", freeze_backbone: bool = True):
         super().__init__()
         from transformers import AutoModel
 
@@ -52,8 +56,6 @@ class DINOv3Backbone(nn.Module):
         self.model = AutoModel.from_pretrained(model_name)
         self.embed_dim = self.model.config.hidden_size
         self.patch_size = self.model.config.patch_size
-
-        # Handle register tokens if present
         self.num_register_tokens = getattr(self.model.config, 'num_register_tokens', 4)
 
         if freeze_backbone:
@@ -66,14 +68,15 @@ class DINOv3Backbone(nn.Module):
     def get_intermediate_layers(self, x: torch.Tensor, layer_ids: list) -> list:
         """Extract features from intermediate layers."""
         outputs = self.model(x, output_hidden_states=True)
-        # Skip embedding layer (index 0), take hidden states
         layer_outputs = outputs.hidden_states[1:]
         selected = [layer_outputs[i] for i in layer_ids]
-
-        # Remove CLS token and register tokens
         skip = 1 + self.num_register_tokens
         return [feat[:, skip:, :] for feat in selected]
 
+
+# =============================================================================
+# Building Blocks
+# =============================================================================
 
 class ResBlock(nn.Module):
     """Residual block with BatchNorm."""
@@ -95,13 +98,7 @@ class ResBlock(nn.Module):
 
 
 class PyramidUpBlock(nn.Module):
-    """
-    Standard convolutional upsampling block for the decoder.
-
-    Architecture:
-        1. Upsample features (2x)
-        2. Process with Conv + ResBlock
-    """
+    """Upsample + Conv + ResBlock."""
 
     def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
@@ -114,37 +111,23 @@ class PyramidUpBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: Feature map to upsample and process.
-
-        Returns:
-            Upsampled and refined feature map.
-        """
-        x = self.upsample(x)
-        x = self.conv(x)
-        return x
+        return self.conv(self.upsample(x))
 
 
-class SegDino(nn.Module):
+# =============================================================================
+# Decoders
+# =============================================================================
+
+class HeavyUNetDecoder(nn.Module):
     """
-    SegDino: Semantic Segmentation with DINOv3 + Heavy UNet Decoder.
+    Heavy UNet Decoder with ResBlocks at every stage.
+    ~50M params. Best quality, needs more data.
     """
+    name = "heavy_unet"
 
-    def __init__(
-        self,
-        model_size: str = "vit-base",
-        nclass: int = 1,
-        features: int = 512,
-        freeze_backbone: bool = True
-    ):
+    def __init__(self, embed_dim: int, nclass: int = 1, features: int = 512):
         super().__init__()
-        self.backbone = DINOv3Backbone(model_size, freeze_backbone=freeze_backbone)
-        self.layer_indices = LAYER_INDICES[model_size]
-        self.patch_size = self.backbone.patch_size
-        embed_dim = self.backbone.embed_dim
-
-        # Feature fusion: Concat 4 layers from backbone
+        # Feature fusion: 4 layers concatenated
         self.project_fuse = nn.Sequential(
             nn.Conv2d(embed_dim * 4, features, kernel_size=1, bias=False),
             nn.BatchNorm2d(features),
@@ -159,13 +142,152 @@ class SegDino(nn.Module):
         )
 
         # Pyramid Decoder: 1/16 -> 1/8 -> 1/4 -> 1/2 -> 1/1
-        self.up1 = PyramidUpBlock(features, 256)  # 1/16 -> 1/8
-        self.up2 = PyramidUpBlock(256, 128)       # 1/8 -> 1/4
-        self.up3 = PyramidUpBlock(128, 64)        # 1/4 -> 1/2
-        self.up4 = PyramidUpBlock(64, 32)         # 1/2 -> 1/1
+        self.up1 = PyramidUpBlock(features, 256)
+        self.up2 = PyramidUpBlock(256, 128)
+        self.up3 = PyramidUpBlock(128, 64)
+        self.up4 = PyramidUpBlock(64, 32)
 
         # Output head
         self.output = nn.Conv2d(32, nclass, kernel_size=1)
+
+    def forward(self, features_2d: list) -> torch.Tensor:
+        """
+        Args:
+            features_2d: List of 4 feature maps from backbone, each (B, C, H, W)
+        Returns:
+            Logits (B, nclass, H*16, W*16)
+        """
+        fused = torch.cat(features_2d, dim=1)
+        feat = self.project_fuse(fused)
+        feat = self.bottleneck(feat)
+        feat = self.up1(feat)
+        feat = self.up2(feat)
+        feat = self.up3(feat)
+        feat = self.up4(feat)
+        return self.output(feat)
+
+
+class MediumDecoder(nn.Module):
+    """
+    Medium decoder with fewer ResBlocks.
+    ~10M params. Good balance.
+    """
+    name = "medium"
+
+    def __init__(self, embed_dim: int, nclass: int = 1, features: int = 256):
+        super().__init__()
+        self.project_fuse = nn.Sequential(
+            nn.Conv2d(embed_dim * 4, features, kernel_size=1, bias=False),
+            nn.BatchNorm2d(features),
+            nn.ReLU(inplace=True)
+        )
+
+        self.bottleneck = ResBlock(features)
+
+        # Simpler upsampling path
+        self.up1 = PyramidUpBlock(features, 128)
+        self.up2 = PyramidUpBlock(128, 64)
+        self.up3 = PyramidUpBlock(64, 32)
+        self.up4 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
+            nn.Conv2d(32, 32, 3, padding=1, bias=False),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True)
+        )
+
+        self.output = nn.Conv2d(32, nclass, kernel_size=1)
+
+    def forward(self, features_2d: list) -> torch.Tensor:
+        fused = torch.cat(features_2d, dim=1)
+        feat = self.project_fuse(fused)
+        feat = self.bottleneck(feat)
+        feat = self.up1(feat)
+        feat = self.up2(feat)
+        feat = self.up3(feat)
+        feat = self.up4(feat)
+        return self.output(feat)
+
+
+class LightDecoder(nn.Module):
+    """
+    Lightweight decoder with bilinear upsampling + conv 1x1.
+    ~500K params. Fast, for testing or limited data.
+    """
+    name = "light"
+
+    def __init__(self, embed_dim: int, nclass: int = 1, features: int = 128):
+        super().__init__()
+        self.project_fuse = nn.Sequential(
+            nn.Conv2d(embed_dim * 4, features, kernel_size=1, bias=False),
+            nn.BatchNorm2d(features),
+            nn.ReLU(inplace=True)
+        )
+
+        self.upsample = nn.Sequential(
+            nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True),
+            nn.Conv2d(features, 64, 3, padding=1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.Upsample(scale_factor=4, mode='bilinear', align_corners=True),
+            nn.Conv2d(64, 32, 3, padding=1, bias=False),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+        )
+
+        self.output = nn.Conv2d(32, nclass, kernel_size=1)
+
+    def forward(self, features_2d: list) -> torch.Tensor:
+        fused = torch.cat(features_2d, dim=1)
+        feat = self.project_fuse(fused)
+        feat = self.upsample(feat)
+        return self.output(feat)
+
+
+# =============================================================================
+# Decoder Registry
+# =============================================================================
+
+DECODERS = {
+    "heavy_unet": HeavyUNetDecoder,
+    "medium": MediumDecoder,
+    "light": LightDecoder,
+}
+
+
+def get_decoder(name: str, embed_dim: int, nclass: int = 1) -> nn.Module:
+    """Get decoder by name."""
+    if name not in DECODERS:
+        raise ValueError(f"Unknown decoder: {name}. Available: {list(DECODERS.keys())}")
+    return DECODERS[name](embed_dim=embed_dim, nclass=nclass)
+
+
+# =============================================================================
+# Main Model
+# =============================================================================
+
+class SegDino(nn.Module):
+    """
+    SegDino: Semantic Segmentation with DINOv3 + Modular Decoder.
+    """
+
+    def __init__(
+        self,
+        model_size: str = "base",
+        decoder_name: str = "heavy_unet",
+        nclass: int = 1,
+        freeze_backbone: bool = True
+    ):
+        super().__init__()
+        self.model_size = model_size
+        self.decoder_name = decoder_name
+
+        self.backbone = DINOv3Backbone(model_size, freeze_backbone=freeze_backbone)
+        self.layer_indices = LAYER_INDICES[model_size]
+        self.patch_size = self.backbone.patch_size
+        embed_dim = self.backbone.embed_dim
+
+        self.decoder = get_decoder(decoder_name, embed_dim, nclass)
+        print(f"[Decoder] {decoder_name} ({sum(p.numel() for p in self.decoder.parameters()):,} params)")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -189,17 +311,13 @@ class SegDino(nn.Module):
             for f in features
         ]
 
-        # Fuse and process in bottleneck
-        fused = torch.cat(features_2d, dim=1)
-        feat = self.project_fuse(fused)
-        feat = self.bottleneck(feat)  # Resolution: 1/16
-
-        # Pure convolutional decoder path
-        feat = self.up1(feat)  # 1/8
-        feat = self.up2(feat)  # 1/4
-        feat = self.up3(feat)  # 1/2
-        feat = self.up4(feat)  # 1/1
-
-        # Output
-        logits = self.output(feat)
+        # Decode
+        logits = self.decoder(features_2d)
         return logits
+
+    def get_config(self) -> dict:
+        """Return model configuration for saving."""
+        return {
+            "model_size": self.model_size,
+            "decoder_name": self.decoder_name,
+        }

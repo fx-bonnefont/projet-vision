@@ -1,203 +1,207 @@
-# SegDino: Small Object Segmentation on Satellite Imagery
+# Segmentation vit + conv1x1
 
-SegDino is a specialized deep learning model designed for segmenting small objects (e.g., planes) in high-resolution satellite imagery (DOTA dataset). It leverages the power of a frozen Self-Supervised Vision Transformer (DINOv3) backbone combined with a custom Heavy U-Net decoder to resolve fine details from coarse semantic features.
+Segmentation sémantique d'objets aériens avec des visions transformers et décodeurs modulaires.
 
-## Recent Updates
+## Architecture
 
-The codebase has been refactored for correctness and maintainability:
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Image RGB (512x512)                                        │
+│           │                                                 │
+│           ▼                                                 │
+│  ┌─────────────────┐                                        │
+│  │  DINOv3 Backbone │  (gelé, pré-entraîné)                 │
+│  │  - small/base/large/huge/giant                           │
+│  │  - large-sat/giant-sat (satellite)                       │
+│  └────────┬────────┘                                        │
+│           │ 4 feature maps multi-échelles                   │
+│           ▼                                                 │
+│  ┌─────────────────┐                                        │
+│  │    Décodeur     │  (entraînable)                         │
+│  │  - heavy_unet (~50M params)                              │
+│  │  - medium (~10M params)                                  │
+│  │  - light (~500K params)                                  │
+│  └────────┬────────┘                                        │
+│           │                                                 │
+│           ▼                                                 │
+│  Masque de segmentation (512x512)                           │
+└─────────────────────────────────────────────────────────────┘
+```
 
-1. **Dice Loss Formula**: Corrected mathematical formula. Previous implementation counted intersection twice in the denominator. Now uses correct formula: `Dice = 2 * |A ∩ B| / (|A| + |B|)`
+## Installation
 
-2. **Code Organization**: Created `utils/` package with modular components:
-   - `utils/distributed.py`: DDP utilities for multi-GPU training
-   - `utils/metrics.py`: Mathematically correct Dice/IoU metrics
-   - `utils/visualization.py`: Inference and visualization helpers
+### Prérequis
 
-3. **Robustness**: Added bounded retry mechanism in dataset loader to prevent infinite loops on corrupted files.
+- Python >= 3.10
+- GPU CUDA (recommandé) ou Apple Silicon (MPS)
+- Token HuggingFace pour accéder aux modèles DINOv3
 
----
+### Setup
 
-## Architecture & Design Choices
+```bash
+# Cloner le repo
+git clone <repo-url>
+cd segdino
 
-### 1. Backbone: DINOv3 (Frozen)
-We use Meta's **DINOv3** (ViT-Small/Base/Large/Huge/Giant) as the feature extractor.
-- **Why Frozen?** DINOv3 features are robust enough to capture semantic concepts without needing full fine-tuning, which saves VRAM and prevents overfitting on small datasets.
-- **Why ViT?** Transformers offer a global receptive field, crucial for understanding context in large aerial scenes.
+# Installer les dépendances avec uv
+uv sync
 
-### 2. Decoder: Heavy U-Net
-The primary challenge is reconstructing high-resolution masks from the coarse (e.g., 1/16) feature map produced by the ViT, which lacks fine spatial details.
-- **Heavy U-Net Decoder:** To solve this, we use a deep and powerful convolutional decoder. It consists of multiple upsampling stages, each containing `ResBlock`s to progressively refine the features and rebuild spatial information.
-- **No Shortcuts:** This decoder architecture is "purist"—it relies **only** on the semantic features from the DINOv3 backbone. It does not receive any "shortcut" connections from the raw input image. This is a deliberate choice to ensure that any analysis performed on the model (e.g., adversarial attacks) is a true test of the backbone's features, not the decoder's ability to leverage raw pixel data.
+# Configurer le token HuggingFace
+echo "HF_TOKEN=hf_xxxxx" > .env
+```
 
-### 3. Training Strategy
-- **Offline Tiling:** Large DOTA images are pre-tiled (512x512) to maximize IO throughput.
-- **Smart Sampling:** We keep all positive tiles (with planes) and a small ratio of negative tiles (background) to balance the dataset.
-- **Loss:** **ComboLoss** (0.5 * BCE + 0.5 * Dice) to handle class imbalance (few object pixels vs massive background).
-- **Optimizer:** AdamW with Cosine Annealing scheduler.
-- **Multi-GPU:** DistributedDataParallel (DDP) with automatic detection for SLURM clusters.
+Le token HuggingFace est nécessaire car les modèles DINOv3 sont en accès restreint. Demandez l'accès sur [HuggingFace](https://huggingface.co/facebook/dinov3-vitl16-pretrain-sat493m).
 
-## Project Structure
+## Structure des données
+
+Le dataset doit être organisé comme suit :
+
+```
+segdata/DOTA/DOTA_PLANES_TILED/
+├── train/
+│   ├── image/
+│   │   ├── tile_0001.png
+│   │   └── ...
+│   └── mask/
+│       ├── tile_0001.png   (même nom que l'image)
+│       └── ...
+└── test/
+    ├── image/
+    └── mask/
+```
+
+- Images : RGB, 512x512 pixels, format PNG
+- Masques : Grayscale, 512x512 pixels, format PNG (blanc = objet, noir = fond)
+
+## Entraînement
+
+### Commande de base
+
+```bash
+uv run python train.py \
+    --data_dir segdata/DOTA/DOTA_PLANES_TILED \
+    --model_size large-sat \
+    --decoder heavy_unet \
+    --target_type mask \
+    --loss center \
+    --epochs 10 \
+    --batch_size 8 \
+    --lr 5e-4
+```
+
+### Options principales
+
+| Argument | Valeurs | Description |
+|----------|---------|-------------|
+| `--model_size` | `small`, `small-plus`, `base`, `large`, `huge`, `giant`, `large-sat`, `giant-sat` | Taille du backbone DINOv3 |
+| `--decoder` | `heavy_unet`, `medium`, `light` | Architecture du décodeur |
+| `--target_type` | `mask`, `center` | Mode segmentation ou détection de centres |
+| `--loss` | `combo`, `dice`, `mse`, `focal`, `center` | Fonction de perte |
+| `--sigma` | float (défaut: 8.0) | Sigma des gaussiennes (mode center) |
+| `--batch_size` | int | Taille de batch par GPU |
+| `--lr` | float | Learning rate (défaut: 5e-4) |
+
+### Backbones recommandés
+
+| Backbone | Usage | VRAM |
+|----------|-------|------|
+| `large-sat` | **Production** - Pré-entraîné sur images satellite | ~16 GB |
+| `base` | Développement rapide | ~8 GB |
+| `small-plus` | Ressources limitées | ~4 GB |
+
+### Sorties
+
+Les checkpoints et logs sont sauvegardés dans `runs/` :
+
+```
+runs/
+├── 20250203_12_heavy_unet_mask_a1b2_best.pth   # Meilleur modèle
+└── 20250203_12_heavy_unet_mask_a1b2_log.csv    # Logs d'entraînement
+```
+
+## Inférence
+
+### Sur des images complètes
+
+```bash
+uv run python inference.py \
+    --ckpt runs/20250203_12_heavy_unet_mask_a1b2_best.pth \
+    --data_dir segdata/DOTA/DOTA_PLANES/test \
+    --save_dir inference_results \
+    --threshold 0.3
+```
+
+L'inférence utilise une fenêtre glissante avec mélange gaussien pour traiter des images de n'importe quelle taille.
+
+### Options
+
+| Argument | Description |
+|----------|-------------|
+| `--ckpt` | Chemin vers le checkpoint |
+| `--data_dir` | Dossier contenant `image/` et `mask/` |
+| `--save_dir` | Dossier de sortie |
+| `--threshold` | Seuil de détection (mode center) |
+| `--tile_size` | Taille des tuiles (défaut: 512) |
+| `--stride` | Pas de la fenêtre glissante (défaut: 384) |
+| `--batch_size` | Batch size pour l'inférence |
+
+### Sortie
+
+Les visualisations côte-à-côte sont générées :
+- **Gauche** : Ground truth (vert)
+- **Droite** : Prédictions (orange)
+
+## Modes de fonctionnement
+
+### Mode Mask (segmentation)
+
+```bash
+--target_type mask --loss combo
+```
+
+Produit un masque binaire de segmentation. Métriques : Dice, IoU.
+
+### Mode Center (détection de centres)
+
+```bash
+--target_type center --loss mse --sigma 8.0
+```
+
+Produit une heatmap avec des pics gaussiens aux centres des objets. Utile pour compter les objets.
+
+## Structure du code
 
 ```
 segdino/
-├── train.py              # Main training script (DDP-enabled)
-├── train_ddp.sh          # SLURM submission script for multi-GPU
-├── test_single_gpu.sh    # Quick test script
-├── verify_setup.py       # Pre-deployment verification
-├── model.py              # SegDino architecture (Heavy UNet Decoder)
-├── dataset.py            # Efficient PreTiledDataset loader
-├── loss.py               # ComboLoss (BCE + Dice) definition
-├── inference.py          # Unified inference script (sliding window on full images)
+├── model.py      # DINOv3 backbone + décodeurs (heavy_unet, medium, light)
+├── dataset.py    # Dataset pré-tuilé avec support mask/center
+├── loss.py       # Fonctions de perte (Dice, Combo, MSE, Focal)
+├── train.py      # Script d'entraînement
+├── inference.py  # Inférence avec fenêtre glissante
 ├── utils/
-│   ├── distributed.py    # DDP utilities
-│   ├── metrics.py        # Dice/IoU metrics
-│   └── visualization.py  # Inference helpers
-├── runs/                 # Training logs (.csv) and checkpoints (.pth)
-└── segdata/              # Symlinks to raw large images
+│   └── metrics.py    # Calcul Dice/IoU
+└── pyproject.toml    # Dépendances
 ```
 
----
+## Dépendances
 
-## Setup & Installation
+Gérées via `uv` et `pyproject.toml` :
 
-### Prerequisites
-- Python 3.10+
-- PyTorch with CUDA support (for GPU training)
+- PyTorch >= 2.3
+- Transformers >= 4.40 (pour DINOv3)
+- OpenCV
+- NumPy, SciPy, tqdm
 
-### Installation
+## Troubleshooting
 
-This project uses `uv` for fast and reproducible environment management.
+### Out of Memory
 
-```bash
-# 1. Create the virtual environment
-# (Requires python3.12, or specify your python version)
-uv venv python3.12 .venv
-source .venv/bin/activate
+Réduire `--batch_size` ou utiliser un backbone plus petit (`base`, `small-plus`).
 
-# 2. Sync dependencies from the lock file
-uv sync
-```
+### Token HuggingFace invalide
 
-### HuggingFace Authentication
+Vérifier que le fichier `.env` contient `HF_TOKEN=hf_xxxxx` et que vous avez demandé l'accès aux modèles DINOv3 sur HuggingFace.
 
-DINOv3 models require HuggingFace access. Create a `.env` file:
+### Masques non trouvés
 
-```bash
-echo "HF_TOKEN=your_huggingface_token_here" > .env
-```
-
-Get your token from: https://huggingface.co/settings/tokens
-
----
-
-## Data Preparation
-
-This project requires a specific data structure, which you can set up with a single symbolic link.
-
-Your main data folder (e.g., `DOTA`) should contain subdirectories for the full images (`DOTA_PLANES`) and the pre-tiled images (`DOTA_PLANES_TILED`).
-
-Create a symbolic link named `DOTA` inside the project's `segdata` directory that points to your main data folder.
-
-```bash
-# Example: If your main DOTA folder is in your home directory
-ln -s ~/DOTA segdata/DOTA
-```
-
-The code will then automatically find the correct datasets for training and inference within `segdata/DOTA/`.
-
----
-
-## Training
-
-### Available Models
-
-| Model | Params | Layers | Pre-training | Recommended Use |
-|-------|--------|--------|--------------|-----------------|
-| `vit-small` | 21.6M | 12 | ImageNet | Quick experiments |
-| `vit-small-plus` | 28.7M | 12 | ImageNet | Quick experiments |
-| `vit-base` | 85.7M | 12 | ImageNet | General purpose |
-| `vit-large` | 0.3B | 24 | ImageNet | High accuracy |
-| `vit-huge` | 0.8B | 32 | ImageNet | Maximum capacity |
-| `vit-giant` | 7B | 40 | ImageNet | Research |
-| **`vit-large-sat`** | 0.3B | 24 | **Satellite (493M)** | **Recommended for aerial** |
-| **`vit-giant-sat`** | 7B | 40 | **Satellite (493M)** | Research on aerial |
-
-**Note**: SAT variants are pre-trained on satellite imagery and may perform better on DOTA.
-
-### Single GPU Training
-
-```bash
-python train.py \
-    --model_size vit-base \
-    --batch_size 10 \
-    --epochs 25
-```
-
-**Common configurations:**
-- **vit-base** on 16GB GPU: `--batch_size 10`
-- **vit-large** on 24GB GPU: `--batch_size 16`
-
-### Multi-GPU Training (SLURM Cluster)
-
-This project is configured to run on the SLURM cluster described in `CLUSTER.md`. The `train_ddp.sh` script is designed to be autonomous, handling environment setup automatically.
-
-#### 1. Interactive Test (Recommended First Step)
-
-Before submitting a long training job, it's best to run a quick test in an interactive session on a compute node.
-
-**a. Request an interactive session with one GPU:**
-```bash
-# On the cluster gateway (gpu-gw)
-sinteractive --partition=3090 --gres=gpu:1 --time=01:00:00
-```
-
-**b. Once on the compute node, run a quick training test:**
-```bash
-# cd to the project directory
-# Make sure your environment is activated: source .venv/bin/activate
-python train.py --model_size vit-small --epochs 1 --batch_size 4
-```
-If this command completes without error, your setup is correct. You can then `exit` the interactive session.
-
-#### 2. Submit a Batch Training Job
-
-To run a full training, submit the `train_ddp.sh` script to the SLURM scheduler.
-
-**a. Launch with default parameters (vit-large, 25 epochs):**
-```bash
-sbatch train_ddp.sh
-```
-
-**b. Launch with custom parameters:**
-
-You can override variables like `MODEL_SIZE` and `EPOCHS` directly with `--export`.
-```bash
-# Example: Train vit-base for 100 epochs
-sbatch --export=ALL,MODEL_SIZE=vit-base,EPOCHS=100 train_ddp.sh
-```
-
-#### 3. Monitor the Job
-Use standard SLURM commands to monitor your job.
-```bash
-# See your running/pending jobs
-squeue --me
-
-# Follow the output log in real-time
-# (The job ID is shown after you run sbatch)
-tail -f logs/slurm_[JOB_ID].out
-```
-
----
-
-## Citation
-
-If using DINOv3 in your research, please cite:
-
-```bibtex
-@misc{oquab2023dinov2,
-  title={DINOv2: Learning Robust Visual Features without Supervision},
-  author={Oquab, Maxime and Darcet, Timothée and Moutakanni, Theo and others},
-  journal={arXiv preprint arXiv:2304.07193},
-  year={2023}
-}
-```
+Les masques doivent avoir exactement le même nom que les images correspondantes.
