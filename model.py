@@ -321,3 +321,54 @@ class SegDino(nn.Module):
             "model_size": self.model_size,
             "decoder_name": self.decoder_name,
         }
+
+
+class DecoderOnly(nn.Module):
+    """
+    Decoder-only model for training with pre-cached backbone features.
+
+    Use this when backbone features have been pre-extracted to disk,
+    allowing much faster decoder experimentation.
+    """
+
+    def __init__(
+        self,
+        model_size: str = "base",
+        decoder_name: str = "heavy_unet",
+        nclass: int = 1
+    ):
+        super().__init__()
+        self.model_size = model_size
+        self.decoder_name = decoder_name
+
+        # Get embed_dim from model config (without loading the backbone)
+        from transformers import AutoConfig
+        model_name = DINOV3_MODELS[model_size]
+        config = AutoConfig.from_pretrained(model_name)
+        embed_dim = config.hidden_size
+
+        self.embed_dim = embed_dim
+        self.decoder = get_decoder(decoder_name, embed_dim, nclass)
+        print(f"[DecoderOnly] {decoder_name} for {model_size} (embed_dim={embed_dim})")
+        print(f"  Decoder params: {sum(p.numel() for p in self.decoder.parameters()):,}")
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass with pre-computed features.
+
+        Args:
+            features: Cached backbone features (B, 4, embed_dim, H, W)
+
+        Returns:
+            Logits (B, 1, H*16, W*16)
+        """
+        # Split into list of 4 feature maps
+        features_2d = [features[:, i] for i in range(4)]
+        return self.decoder(features_2d)
+
+    def get_config(self) -> dict:
+        """Return model configuration for saving."""
+        return {
+            "model_size": self.model_size,
+            "decoder_name": self.decoder_name,
+        }

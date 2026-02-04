@@ -3,19 +3,167 @@ SegDino Inference with Sliding Window.
 
 Supports both segmentation (mask) and center detection modes.
 Processes full images using tiled prediction and generates side-by-side visualizations.
+Computes classification metrics and ROC curve data.
 """
 import argparse
+import csv
 import os
+import re
 
 import cv2
 import numpy as np
 import torch
 import torchvision.transforms.functional as TF
 from scipy.ndimage import maximum_filter
+from scipy.spatial.distance import cdist
 from tqdm import tqdm
 
 from dataset import DOTA_MEAN, DOTA_STD, mask_to_centers
 from model import DECODERS, SegDino
+
+
+def extract_checkpoint_id(ckpt_path: str) -> str:
+    """
+    Extract a unique identifier from the checkpoint path.
+
+    Examples:
+        'checkpoints/best_model_light_1234.pth' -> 'light_1234'
+        'runs/20260204_08_light_center_7124.pth' -> '20260204_08_light_center_7124'
+        'model.pth' -> 'model'
+    """
+    basename = os.path.basename(ckpt_path)
+    name = os.path.splitext(basename)[0]
+
+    # Remove common prefixes
+    name = re.sub(r'^(best_model_|checkpoint_)', '', name)
+
+    return name
+
+
+def match_centers(gt_centers: list, pred_centers: list, match_radius: float = 20.0) -> tuple:
+    """
+    Match predicted centers to ground truth centers using nearest neighbor.
+
+    Returns:
+        tuple: (true_positives, false_positives, false_negatives)
+    """
+    if len(gt_centers) == 0 and len(pred_centers) == 0:
+        return 0, 0, 0
+    if len(gt_centers) == 0:
+        return 0, len(pred_centers), 0
+    if len(pred_centers) == 0:
+        return 0, 0, len(gt_centers)
+
+    gt_arr = np.array(gt_centers)
+    pred_arr = np.array(pred_centers)
+
+    # Compute pairwise distances
+    distances = cdist(pred_arr, gt_arr)
+
+    # Greedy matching: assign each prediction to nearest unmatched GT
+    matched_gt = set()
+    tp = 0
+    for i in range(len(pred_centers)):
+        min_dist_idx = np.argmin(distances[i])
+        if distances[i, min_dist_idx] <= match_radius and min_dist_idx not in matched_gt:
+            tp += 1
+            matched_gt.add(min_dist_idx)
+
+    fp = len(pred_centers) - tp
+    fn = len(gt_centers) - tp
+
+    return tp, fp, fn
+
+
+def compute_metrics_at_threshold(all_gt_centers: list, all_heatmaps: list,
+                                  threshold: float, match_radius: float = 20.0) -> dict:
+    """
+    Compute classification metrics at a given threshold.
+
+    Returns:
+        dict with precision, recall, f1, accuracy, tp, fp, fn
+    """
+    total_tp, total_fp, total_fn = 0, 0, 0
+
+    for gt_centers, heatmap in zip(all_gt_centers, all_heatmaps):
+        pred_centers = find_peaks(heatmap, threshold=threshold)
+        tp, fp, fn = match_centers(gt_centers, pred_centers, match_radius)
+        total_tp += tp
+        total_fp += fp
+        total_fn += fn
+
+    precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
+    recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    # For object detection, "accuracy" is often defined as TP / (TP + FP + FN)
+    accuracy = total_tp / (total_tp + total_fp + total_fn) if (total_tp + total_fp + total_fn) > 0 else 0.0
+
+    return {
+        'threshold': threshold,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'accuracy': accuracy,
+        'tp': total_tp,
+        'fp': total_fp,
+        'fn': total_fn
+    }
+
+
+def save_metrics_csv(save_dir: str, metrics_at_thresholds: list, best_threshold: float):
+    """
+    Save classification metrics to a CSV file.
+
+    The CSV includes:
+    - Summary metrics at the best (used) threshold
+    - ROC-like data at different thresholds (0.1 step)
+    """
+    csv_path = os.path.join(save_dir, 'metrics.csv')
+
+    with open(csv_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+
+        # Header section
+        writer.writerow(['# SegDino Inference Metrics'])
+        writer.writerow(['# Best threshold used:', best_threshold])
+        writer.writerow([])
+
+        # Find metrics at best threshold
+        best_metrics = None
+        for m in metrics_at_thresholds:
+            if abs(m['threshold'] - best_threshold) < 0.01:
+                best_metrics = m
+                break
+
+        if best_metrics:
+            writer.writerow(['## Summary at threshold', best_threshold])
+            writer.writerow(['Metric', 'Value'])
+            writer.writerow(['Precision', f"{best_metrics['precision']:.4f}"])
+            writer.writerow(['Recall', f"{best_metrics['recall']:.4f}"])
+            writer.writerow(['F1 Score', f"{best_metrics['f1']:.4f}"])
+            writer.writerow(['Accuracy', f"{best_metrics['accuracy']:.4f}"])
+            writer.writerow(['True Positives', best_metrics['tp']])
+            writer.writerow(['False Positives', best_metrics['fp']])
+            writer.writerow(['False Negatives', best_metrics['fn']])
+            writer.writerow([])
+
+        # ROC curve data
+        writer.writerow(['## ROC Curve Data (threshold sweep)'])
+        writer.writerow(['Threshold', 'Precision', 'Recall', 'F1', 'Accuracy', 'TP', 'FP', 'FN'])
+        for m in metrics_at_thresholds:
+            writer.writerow([
+                f"{m['threshold']:.2f}",
+                f"{m['precision']:.4f}",
+                f"{m['recall']:.4f}",
+                f"{m['f1']:.4f}",
+                f"{m['accuracy']:.4f}",
+                m['tp'],
+                m['fp'],
+                m['fn']
+            ])
+
+    return csv_path
 
 
 def get_gaussian_weight_map(size, device):
@@ -128,23 +276,41 @@ def draw_centers(img, centers: list, color, radius: int = 8, thickness: int = 2)
     """
     Draw crosses at center locations (for center detection mode).
 
+    The crosses have tapered branches: thick on the outer segments and thin near
+    the center. This allows seeing the crosses from far on the full image while
+    also seeing the object underneath when zoomed on small objects.
+
     Args:
         img: BGR image
         centers: List of (x, y) coordinates
         color: BGR color tuple
         radius: Size of the cross
-        thickness: Line thickness
+        thickness: Base line thickness (outer segments)
 
     Returns:
         Image with crosses drawn
     """
     out = img.copy()
+
+    # Define thickness gradient: thick outer, thin inner
+    inner_radius = max(2, radius // 4)  # Inner thin zone
+    inner_thickness = max(1, thickness // 3)  # Thin thickness near center
+
     for cx, cy in centers:
-        # Draw cross
-        cv2.line(out, (cx - radius, cy), (cx + radius, cy), color, thickness)
-        cv2.line(out, (cx, cy - radius), (cx, cy + radius), color, thickness)
-        # Draw circle around
-        cv2.circle(out, (cx, cy), radius, color, thickness)
+        # Draw outer segments (thick) - from radius to inner_radius
+        # Horizontal
+        cv2.line(out, (cx - radius, cy), (cx - inner_radius, cy), color, thickness)
+        cv2.line(out, (cx + inner_radius, cy), (cx + radius, cy), color, thickness)
+        # Vertical
+        cv2.line(out, (cx, cy - radius), (cx, cy - inner_radius), color, thickness)
+        cv2.line(out, (cx, cy + inner_radius), (cx, cy + radius), color, thickness)
+
+        # Draw inner segments (thin) - from inner_radius to center
+        # Horizontal
+        cv2.line(out, (cx - inner_radius, cy), (cx + inner_radius, cy), color, inner_thickness)
+        # Vertical
+        cv2.line(out, (cx, cy - inner_radius), (cx, cy + inner_radius), color, inner_thickness)
+
     return out
 
 
@@ -200,6 +366,8 @@ def main():
                         help="Override target type (auto-detected from checkpoint)")
     parser.add_argument("--threshold", type=float, default=0.3,
                         help="Detection threshold (for center mode)")
+    parser.add_argument("--match_radius", type=float, default=20.0,
+                        help="Radius for matching predicted centers to GT (in pixels)")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--tile_size", type=int, default=512)
     parser.add_argument("--stride", type=int, default=384)
@@ -207,7 +375,12 @@ def main():
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-    os.makedirs(args.save_dir, exist_ok=True)
+
+    # Create output directory with checkpoint ID as subfolder
+    ckpt_id = extract_checkpoint_id(args.ckpt)
+    save_dir = os.path.join(args.save_dir, ckpt_id)
+    os.makedirs(save_dir, exist_ok=True)
+    print(f"Results will be saved to: {save_dir}")
 
     # Load model
     print(f"Loading checkpoint: {args.ckpt}")
@@ -240,6 +413,10 @@ def main():
 
     print(f"Processing {len(files)} images...")
     print(f"Tile: {args.tile_size}, Stride: {args.stride}, Threshold: {args.threshold}")
+
+    # Collect data for metrics computation (center mode only)
+    all_gt_centers = []
+    all_heatmaps = []
 
     for fname in tqdm(files, desc="Inference"):
         img_path = os.path.join(img_dir, fname)
@@ -275,6 +452,10 @@ def main():
             gt_centers = mask_to_centers(gt_mask * 255)
             pred_centers = find_peaks(prob_map, threshold=args.threshold)
 
+            # Store for metrics computation
+            all_gt_centers.append(gt_centers)
+            all_heatmaps.append(prob_map)
+
             vis_gt = draw_centers(img, gt_centers, (0, 255, 0), radius=radius, thickness=thickness)
             vis_pred = draw_centers(img, pred_centers, (0, 165, 255), radius=radius, thickness=thickness)
 
@@ -298,11 +479,42 @@ def main():
             scale = 4000 / max(H, W)
             combined = cv2.resize(combined, (int(W * scale), int(H * scale)))
 
-        cv2.imwrite(os.path.join(args.save_dir, fname), combined)
+        cv2.imwrite(os.path.join(save_dir, fname), combined)
 
     mode_desc = "crosses at centers" if target_type == "center" else "bounding boxes"
-    print(f"\nDone! Visualizations saved to: {args.save_dir}")
+    print(f"\nDone! Visualizations saved to: {save_dir}")
     print(f"Format: Left=GT (green {mode_desc}), Right=Pred (orange {mode_desc})")
+
+    # Compute and save metrics (center mode only)
+    if target_type == "center" and len(all_heatmaps) > 0:
+        print("\nComputing classification metrics...")
+
+        # Compute metrics at different thresholds (0.1 step for ROC curve)
+        thresholds = [i / 10.0 for i in range(1, 10)]  # 0.1, 0.2, ..., 0.9
+        metrics_at_thresholds = []
+
+        for thresh in tqdm(thresholds, desc="Computing ROC"):
+            metrics = compute_metrics_at_threshold(
+                all_gt_centers, all_heatmaps,
+                threshold=thresh,
+                match_radius=args.match_radius
+            )
+            metrics_at_thresholds.append(metrics)
+
+        # Save metrics CSV
+        csv_path = save_metrics_csv(save_dir, metrics_at_thresholds, args.threshold)
+        print(f"Metrics saved to: {csv_path}")
+
+        # Print summary at used threshold
+        for m in metrics_at_thresholds:
+            if abs(m['threshold'] - args.threshold) < 0.01:
+                print(f"\n=== Metrics at threshold {args.threshold} ===")
+                print(f"  Precision: {m['precision']:.4f}")
+                print(f"  Recall:    {m['recall']:.4f}")
+                print(f"  F1 Score:  {m['f1']:.4f}")
+                print(f"  Accuracy:  {m['accuracy']:.4f}")
+                print(f"  TP: {m['tp']}, FP: {m['fp']}, FN: {m['fn']}")
+                break
 
 
 if __name__ == "__main__":

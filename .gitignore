@@ -28,3 +28,6 @@ segdata/
 *.pth
 *.pt
 
+# Agents
+.claude/
+.vscode/

@@ -2,6 +2,7 @@
 SegDino training entry point for single-device (local) runs.
 
 Supports both segmentation (mask) and center detection modes.
+Supports training with pre-cached backbone features for faster experimentation.
 """
 import argparse
 import os
@@ -13,10 +14,12 @@ from datetime import datetime
 import torch
 from tqdm import tqdm
 
-from model import SegDino, DECODERS
-from dataset import PreTiledDataset
+from model import SegDino, DecoderOnly, DECODERS
+from dataset import PreTiledDataset, CachedFeaturesDataset
 from loss import get_loss, LOSSES
 from utils import calculate_dice_iou, get_model_stats
+from inference import find_peaks, match_centers
+from extract_features import extract_and_save_features, get_cache_dir
 
 
 def segdino_collate(batch):
@@ -74,16 +77,26 @@ def train_epoch(model, loader, criterion, optimizer, device, rank, target_type):
 
 
 @torch.no_grad()
-def evaluate(model, loader, criterion, device, rank, target_type):
-    """Evaluation on validation set."""
+def evaluate(model, loader, criterion, device, rank, target_type, threshold=0.3, match_radius=20.0):
+    """
+    Evaluation on validation set.
+
+    For center detection mode, computes real detection metrics (F1 score)
+    instead of pixel-wise MSE, using peak detection and center matching.
+    """
     model.eval()
     total_loss = 0.0
-    total_metric = 0.0  # IoU for mask, MSE for center
+
+    # For mask mode: accumulate IoU
+    total_iou = 0.0
+
+    # For center mode: accumulate TP, FP, FN for F1 calculation
+    total_tp, total_fp, total_fn = 0, 0, 0
 
     # Progress bar only on rank 0
     iterator = tqdm(loader, desc="Eval") if rank == 0 else loader
 
-    for imgs, targets, _ in iterator:
+    for imgs, targets, metas in iterator:
         imgs, targets = imgs.to(device), targets.to(device)
         logits = model(imgs)
 
@@ -92,17 +105,39 @@ def evaluate(model, loader, criterion, device, rank, target_type):
         if target_type == "mask":
             # Use IoU for segmentation
             _, iou = calculate_dice_iou(logits, targets)
-            total_metric += iou
+            total_iou += iou
         else:
-            # Use negative MSE (higher is better) for center detection
-            pred = torch.sigmoid(logits)
-            mse = ((pred - targets) ** 2).mean().item()
-            total_metric += (1.0 - mse)  # Convert to "higher is better"
+            # Center detection: compute real detection metrics
+            pred = torch.sigmoid(logits).cpu().numpy()
+
+            for i in range(pred.shape[0]):
+                # Get predicted centers from heatmap
+                pred_heatmap = pred[i].squeeze()
+                pred_centers = find_peaks(pred_heatmap, threshold=threshold)
+
+                # Get GT centers from metadata
+                gt_centers = metas[i].get('centers', [])
+
+                # Match and count
+                tp, fp, fn = match_centers(gt_centers, pred_centers, match_radius=match_radius)
+                total_tp += tp
+                total_fp += fp
+                total_fn += fn
 
         del logits, imgs, targets
 
     n = len(loader)
-    return total_loss / n, total_metric / n
+    avg_loss = total_loss / n
+
+    if target_type == "mask":
+        return avg_loss, total_iou / n
+    else:
+        # Compute F1 score from accumulated TP, FP, FN
+        precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
+        recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+
+        return avg_loss, f1, precision, recall, total_tp, total_fp, total_fn
 
 
 def save_checkpoint(model, path: str, target_type: str, loss_name: str):
@@ -117,14 +152,34 @@ def save_checkpoint(model, path: str, target_type: str, loss_name: str):
     torch.save(checkpoint, path)
 
 
+def check_cached_features(data_dir: str, model_size: str) -> bool:
+    """Check if cached features exist for the given model_size."""
+    cache_dir = get_cache_dir(data_dir)
+    model_cache_dir = os.path.join(cache_dir, model_size)
+    train_cache = os.path.join(model_cache_dir, "train")
+    test_cache = os.path.join(model_cache_dir, "test")
+
+    if not os.path.exists(train_cache) or not os.path.exists(test_cache):
+        return False
+
+    # Check if there are actual files
+    train_files = [f for f in os.listdir(train_cache) if f.endswith(".pt")]
+    test_files = [f for f in os.listdir(test_cache) if f.endswith(".pt")]
+
+    return len(train_files) > 0 and len(test_files) > 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="SegDino Training")
-    parser.add_argument("--data_dir", default="segdata/DOTA/DOTA_PLANES_TILED")
+    parser.add_argument("--data_dir", default="segdata/DOTA/DOTA_PLANES_TILED",
+                        help="Path to tiled dataset")
     parser.add_argument(
         "--model_size",
         default="small",
         choices=["small", "small-plus", "base", "large", "huge", "giant", "large-sat", "giant-sat"],
     )
+    parser.add_argument("--no_cache", action="store_true",
+                        help="Disable feature caching (force full model training)")
     parser.add_argument(
         "--decoder",
         default="light",
@@ -144,6 +199,10 @@ def main():
         help=f"Loss function. Available: {list(LOSSES.keys())}",
     )
     parser.add_argument("--sigma", type=float, default=8.0, help="Gaussian sigma for center heatmaps")
+    parser.add_argument("--threshold", type=float, default=0.3,
+                        help="Detection threshold for center mode validation metrics")
+    parser.add_argument("--match_radius", type=float, default=20.0,
+                        help="Radius for matching predicted centers to GT (in pixels)")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument(
         "--batch_size",
@@ -152,6 +211,12 @@ def main():
         help="Batch size per GPU (effective batch = batch_size × num_gpus)",
     )
     parser.add_argument("--lr", type=float, default=5e-4)
+    parser.add_argument("--no_warm_restarts", action="store_true",
+                        help="Disable SGDR and use simple CosineAnnealing instead")
+    parser.add_argument("--t0", type=int, default=10,
+                        help="SGDR: number of epochs before first restart")
+    parser.add_argument("--t_mult", type=int, default=1,
+                        help="SGDR: multiplier for period after each restart (1 = constant period)")
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -186,26 +251,51 @@ def main():
     best_pth_path = os.path.join(log_dir, f"{run_id}_best.pth")
     csv_path = os.path.join(log_dir, f"{run_id}_log.csv")
 
-    print(f"\n{'='*60}")
-    print(f"SegDino Training: {run_id}")
-    print(f"{'='*60}")
-    print(f"Backbone: {args.model_size}")
-    print(f"Decoder: {args.decoder}")
-    print(f"Target: {args.target_type}" + (f" (sigma={args.sigma})" if args.target_type == 'center' else ""))
-    print(f"Loss: {args.loss}")
-    print(f"Batch size: {args.batch_size}")
-    print(f"LR: {args.lr} | Epochs: {args.epochs}")
-    print(f"Data: {args.data_dir}")
-    print(f"{'='*60}\n")
+    # ========================
+    # Feature Cache Detection
+    # ========================
+    cache_dir = get_cache_dir(args.data_dir)
+    use_cached = False
+
+    if not args.no_cache:
+        model_cache_path = os.path.join(cache_dir, args.model_size)
+        if check_cached_features(args.data_dir, args.model_size):
+            print(f"\n[Cache] Cached features FOUND for '{args.model_size}'")
+            print(f"[Cache] Location: {model_cache_path}")
+            print(f"[Cache] Using decoder-only training (fast mode)\n")
+            use_cached = True
+        else:
+            print(f"\n[Cache] No cached features for '{args.model_size}'")
+            print(f"[Cache] Extracting features to: {model_cache_path}")
+            print(f"[Cache] This is a one-time operation...\n")
+            extract_and_save_features(
+                model_size=args.model_size,
+                data_dir=args.data_dir,
+                output_dir=cache_dir,
+                batch_size=args.batch_size,
+                device=device,
+                use_fp16=True
+            )
+            use_cached = True
+            print(f"\n[Cache] Feature extraction complete!")
+            print(f"[Cache] Using decoder-only training (fast mode)\n")
+    else:
+        print(f"\n[Cache] Disabled (--no_cache). Using full model.\n")
 
     # ========================
     # Model
     # ========================
-    model = SegDino(
-        model_size=args.model_size,
-        decoder_name=args.decoder,
-        freeze_backbone=True
-    ).to(device)
+    if use_cached:
+        model = DecoderOnly(
+            model_size=args.model_size,
+            decoder_name=args.decoder
+        ).to(device)
+    else:
+        model = SegDino(
+            model_size=args.model_size,
+            decoder_name=args.decoder,
+            freeze_backbone=True
+        ).to(device)
 
     # ========================
     # Optimizer & Scheduler
@@ -213,9 +303,17 @@ def main():
     optimizer = torch.optim.AdamW(
         filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=args.epochs, eta_min=1e-6
-    )
+
+    if args.no_warm_restarts:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.epochs, eta_min=1e-6
+        )
+        scheduler_name = "CosineAnnealing"
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer, T_0=args.t0, T_mult=args.t_mult, eta_min=1e-6
+        )
+        scheduler_name = f"SGDR(T0={args.t0}, Tmult={args.t_mult})"
 
     # ========================
     # Loss Function
@@ -223,10 +321,39 @@ def main():
     criterion = get_loss(args.loss).to(device)
 
     # ========================
+    # Config Summary
+    # ========================
+    print(f"\n{'='*60}")
+    print(f"SegDino Training: {run_id}")
+    print(f"{'='*60}")
+    print(f"Backbone: {args.model_size}" + (" (CACHED)" if use_cached else ""))
+    print(f"Decoder: {args.decoder}")
+    print(f"Target: {args.target_type}" + (f" (sigma={args.sigma})" if args.target_type == 'center' else ""))
+    print(f"Loss: {args.loss}")
+    if args.target_type == 'center':
+        print(f"Detection threshold: {args.threshold} | Match radius: {args.match_radius}px")
+    print(f"Batch size: {args.batch_size}")
+    print(f"LR: {args.lr} | Epochs: {args.epochs} | Scheduler: {scheduler_name}")
+    print(f"Data: {args.data_dir}")
+    if use_cached:
+        print(f"Cached features: {cache_dir}")
+    print(f"{'='*60}\n")
+
+    # ========================
     # Data
     # ========================
-    train_dataset = PreTiledDataset(args.data_dir, "train", target_type=args.target_type, sigma=args.sigma)
-    val_dataset = PreTiledDataset(args.data_dir, "test", target_type=args.target_type, sigma=args.sigma)
+    if use_cached:
+        train_dataset = CachedFeaturesDataset(
+            cache_dir, args.data_dir, args.model_size,
+            "train", target_type=args.target_type, sigma=args.sigma
+        )
+        val_dataset = CachedFeaturesDataset(
+            cache_dir, args.data_dir, args.model_size,
+            "test", target_type=args.target_type, sigma=args.sigma
+        )
+    else:
+        train_dataset = PreTiledDataset(args.data_dir, "train", target_type=args.target_type, sigma=args.sigma)
+        val_dataset = PreTiledDataset(args.data_dir, "test", target_type=args.target_type, sigma=args.sigma)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -250,24 +377,33 @@ def main():
     # ========================
     # Logging Init
     # ========================
-    metric_name = "val_iou" if args.target_type == "mask" else "val_score"
     if rank == 0:
         with open(csv_path, "w") as f:
             f.write(f"# SegDino Training Log\n")
             f.write(f"# Run ID: {run_id}\n")
             f.write(f"# Backbone: {args.model_size}\n")
+            f.write(f"# Cached features: {use_cached}\n")
             f.write(f"# Decoder: {args.decoder}\n")
             f.write(f"# Target: {args.target_type}\n")
             f.write(f"# Loss: {args.loss}\n")
             f.write(f"# Sigma: {args.sigma}\n")
+            if args.target_type == 'center':
+                f.write(f"# Detection threshold: {args.threshold}\n")
+                f.write(f"# Match radius: {args.match_radius}\n")
             f.write(f"# Batch size: {args.batch_size}\n")
             f.write(f"# Device: {device}\n")
             f.write(f"# LR: {args.lr}\n")
+            f.write(f"# Scheduler: {scheduler_name}\n")
             f.write(f"# Epochs: {args.epochs}\n")
             f.write(f"# Data: {args.data_dir}\n")
+            if use_cached:
+                f.write(f"# Cached features dir: {cache_dir}\n")
             f.write(f"# Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write("#\n")
-            f.write(f"epoch,train_loss,val_loss,{metric_name},grad_norm,weight_norm,lr,duration\n")
+            if args.target_type == "mask":
+                f.write("epoch,train_loss,val_loss,val_iou,grad_norm,weight_norm,lr,duration\n")
+            else:
+                f.write("epoch,train_loss,val_loss,val_f1,val_precision,val_recall,tp,fp,fn,grad_norm,weight_norm,lr,duration\n")
 
     # ========================
     # Zero-Epoch Mode: Save initial weights and exit
@@ -294,9 +430,18 @@ def main():
         t_loss, t_grad, t_weight = train_epoch(
             model, train_loader, criterion, optimizer, device, rank, args.target_type
         )
-        v_loss, v_metric = evaluate(
-            model, val_loader, criterion, device, rank, args.target_type
-        )
+
+        if args.target_type == "mask":
+            v_loss, v_metric = evaluate(
+                model, val_loader, criterion, device, rank, args.target_type
+            )
+            v_precision, v_recall = None, None
+            v_tp, v_fp, v_fn = None, None, None
+        else:
+            v_loss, v_metric, v_precision, v_recall, v_tp, v_fp, v_fn = evaluate(
+                model, val_loader, criterion, device, rank, args.target_type,
+                threshold=args.threshold, match_radius=args.match_radius
+            )
 
         # Memory cleanup
         if torch.cuda.is_available():
@@ -308,21 +453,38 @@ def main():
 
         # Logging (Rank 0 only)
         if rank == 0:
-            metric_label = "ValIoU" if args.target_type == "mask" else "ValScore"
-            log_msg = (
-                f"Epoch {epoch}/{args.epochs} | "
-                f"TrLoss: {t_loss:.4f} | {metric_label}: {v_metric:.4f} | "
-                f"Grad: {t_grad:.2f} | LR: {current_lr:.2e} | Time: {duration:.1f}s"
-            )
-            tqdm.write(log_msg)
-
-            with open(csv_path, "a") as f:
-                f.write(
-                    f"{epoch},{t_loss:.4f},{v_loss:.4f},{v_metric:.4f},"
-                    f"{t_grad:.4f},{t_weight:.4f},{current_lr:.2e},{duration:.1f}\n"
+            if args.target_type == "mask":
+                log_msg = (
+                    f"Epoch {epoch}/{args.epochs} | "
+                    f"TrLoss: {t_loss:.4f} | ValIoU: {v_metric:.4f} | "
+                    f"Grad: {t_grad:.2f} | LR: {current_lr:.2e} | Time: {duration:.1f}s"
                 )
+                tqdm.write(log_msg)
+
+                with open(csv_path, "a") as f:
+                    f.write(
+                        f"{epoch},{t_loss:.4f},{v_loss:.4f},{v_metric:.4f},"
+                        f"{t_grad:.4f},{t_weight:.4f},{current_lr:.2e},{duration:.1f}\n"
+                    )
+            else:
+                log_msg = (
+                    f"Epoch {epoch}/{args.epochs} | "
+                    f"TrLoss: {t_loss:.4f} | F1: {v_metric:.4f} | "
+                    f"P: {v_precision:.3f} R: {v_recall:.3f} | "
+                    f"TP:{v_tp} FP:{v_fp} FN:{v_fn} | "
+                    f"Grad: {t_grad:.2f} | LR: {current_lr:.2e} | Time: {duration:.1f}s"
+                )
+                tqdm.write(log_msg)
+
+                with open(csv_path, "a") as f:
+                    f.write(
+                        f"{epoch},{t_loss:.4f},{v_loss:.4f},{v_metric:.4f},"
+                        f"{v_precision:.4f},{v_recall:.4f},{v_tp},{v_fp},{v_fn},"
+                        f"{t_grad:.4f},{t_weight:.4f},{current_lr:.2e},{duration:.1f}\n"
+                    )
 
             # Save best model
+            metric_label = "ValIoU" if args.target_type == "mask" else "F1"
             if v_metric > best_metric:
                 best_metric = v_metric
                 save_checkpoint(model, best_pth_path, args.target_type, args.loss)
@@ -332,7 +494,7 @@ def main():
     # Cleanup
     # ========================
     if rank == 0:
-        metric_label = "IoU" if args.target_type == "mask" else "Score"
+        metric_label = "IoU" if args.target_type == "mask" else "F1"
         print(f"\n{'='*60}")
         print(f"Training Complete!")
         print(f"Best Validation {metric_label}: {best_metric:.4f}")

@@ -179,3 +179,127 @@ class PreTiledDataset(data.Dataset):
             f"Failed to load any valid image after {max_attempts} attempts. "
             f"Check dataset integrity."
         )
+
+
+class CachedFeaturesDataset(data.Dataset):
+    """
+    Loads pre-computed backbone features from disk for fast decoder training.
+
+    Expected structure:
+        cached_features_dir/model_size/split/*.pt  (features)
+        original_data_dir/split/mask/*.png         (masks for target generation)
+
+    Args:
+        cached_features_dir: Directory with cached features (e.g., /Volumes/X9Pro/DOTA_PLANES_TILED_CACHED_FEATURES)
+        original_data_dir: Directory with original tiled data (for masks)
+        model_size: Backbone model size (must match cached features)
+        split: 'train' or 'test'
+        target_type: 'mask' for binary segmentation, 'center' for gaussian heatmaps
+        sigma: Gaussian sigma for center mode (default: 8.0)
+    """
+
+    def __init__(
+        self,
+        cached_features_dir: str,
+        original_data_dir: str,
+        model_size: str,
+        split: str = "train",
+        target_type: str = "mask",
+        sigma: float = 8.0
+    ):
+        self.features_dir = os.path.join(cached_features_dir, model_size, split)
+        self.mask_dir = os.path.join(original_data_dir, split, "mask")
+        self.target_type = target_type
+        self.sigma = sigma
+        self.model_size = model_size
+
+        # Verify directories exist
+        if not os.path.exists(self.features_dir):
+            raise ValueError(f"Cached features not found: {self.features_dir}")
+        if not os.path.exists(self.mask_dir):
+            raise ValueError(f"Mask directory not found: {self.mask_dir}")
+
+        # Load metadata
+        metadata_path = os.path.join(cached_features_dir, model_size, "metadata.pt")
+        if os.path.exists(metadata_path):
+            self.metadata = torch.load(metadata_path)
+            self.embed_dim = self.metadata["embed_dim"]
+        else:
+            print(f"[WARN] No metadata found at {metadata_path}")
+            self.metadata = None
+            self.embed_dim = None
+
+        # Get list of cached feature files
+        self.feature_files = sorted([
+            f for f in os.listdir(self.features_dir)
+            if f.endswith(".pt") and not f.startswith("._")
+        ])
+
+        if len(self.feature_files) == 0:
+            raise ValueError(f"No cached features found in {self.features_dir}")
+
+        mode_str = f"target={target_type}" + (f", sigma={sigma}" if target_type == "center" else "")
+        print(f"[{split.upper()}] Loaded {len(self.feature_files)} cached features ({mode_str})")
+        if self.metadata:
+            print(f"  Backbone: {model_size}, embed_dim: {self.embed_dim}")
+
+    def __len__(self):
+        return len(self.feature_files)
+
+    def __getitem__(self, idx: int):
+        """
+        Load cached features and generate target.
+
+        Returns:
+            features: Cached backbone features (4, embed_dim, H, W) as float32
+            target_t: Target tensor (1, H, W) - mask or heatmap depending on target_type
+            meta: Dict with 'id' and optionally 'centers'
+        """
+        max_attempts = min(10, len(self.feature_files))
+
+        for attempt in range(max_attempts):
+            try:
+                feat_fname = self.feature_files[idx]
+                feat_path = os.path.join(self.features_dir, feat_fname)
+
+                # Corresponding mask file (same name but .png)
+                mask_fname = feat_fname.replace(".pt", ".png")
+                mask_path = os.path.join(self.mask_dir, mask_fname)
+
+                # Load cached features
+                features = torch.load(feat_path)
+                if features.dtype == torch.float16:
+                    features = features.float()
+
+                # Load mask for target generation
+                mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+                if mask is None:
+                    raise ValueError(f"Failed to read mask {mask_fname}")
+
+                # Ensure 512x512 size
+                if mask.shape[0] != 512 or mask.shape[1] != 512:
+                    mask = cv2.resize(mask, (512, 512), interpolation=cv2.INTER_NEAREST)
+
+                # Generate target based on mode
+                meta = {"id": mask_fname}
+
+                if self.target_type == "center":
+                    centers = mask_to_centers(mask)
+                    heatmap = generate_gaussian_heatmap(centers, size=512, sigma=self.sigma)
+                    target_t = torch.from_numpy(heatmap).float().unsqueeze(0)
+                    meta["centers"] = centers
+                    meta["num_objects"] = len(centers)
+                else:
+                    mask_t = torch.from_numpy(mask).float() / 255.0
+                    target_t = (mask_t > 0.5).float().unsqueeze(0)
+
+                return features, target_t, meta
+
+            except Exception as e:
+                print(f"[WARN] Error loading {self.feature_files[idx]}: {e}. Trying next...")
+                idx = (idx + 1) % len(self.feature_files)
+
+        raise RuntimeError(
+            f"Failed to load any valid features after {max_attempts} attempts. "
+            f"Check cache integrity."
+        )
