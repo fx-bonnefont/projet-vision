@@ -8,8 +8,8 @@ dependencies = [
     "opencv-python-headless>=4.8",
     "python-dotenv>=1.0",
     "scipy>=1.11",
-    "torch>=2.3,<2.5",
-    "torchvision>=0.18,<0.20",
+    "torch>=2.5",
+    "torchvision>=0.20",
     "tqdm>=4.66",
     "transformers>=4.40,<6",
 ]
