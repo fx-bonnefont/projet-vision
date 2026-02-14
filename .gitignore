@@ -21,6 +21,9 @@ logs/
 # Inference Results (generated, not versioned)
 inference_results/
 
+# Attack Results (generated, not versioned)
+attack_results/
+
 # Data Directories
 segdata/
 

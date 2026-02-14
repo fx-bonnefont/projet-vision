@@ -5,8 +5,8 @@ This script pre-computes DINOv3 backbone features for all tiles,
 allowing decoder training without recomputing backbone features each epoch.
 
 Usage:
-    python extract_features.py --model_size small-plus --data_dir segdata/DOTA/DOTA_PLANES_TILED
-    python extract_features.py --model_size large-sat --data_dir segdata/DOTA/DOTA_PLANES_TILED
+    python extract_features.py -m small-plus --data-dir segdata/DOTA/DOTA_PLANES_TILED
+    python extract_features.py -m large-sat --data-dir segdata/DOTA/DOTA_PLANES_TILED
 """
 import argparse
 import os
@@ -164,12 +164,12 @@ def get_cache_dir(data_dir: str) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="Extract and cache backbone features")
-    parser.add_argument("--model_size", required=True,
+    parser.add_argument("-m", required=True,
                         choices=["small", "small-plus", "base", "large", "huge", "giant", "large-sat", "giant-sat"],
                         help="DINOv3 backbone size")
-    parser.add_argument("--data_dir", default="segdata/DOTA/DOTA_PLANES_TILED",
+    parser.add_argument("--data-dir", default="segdata/DOTA/DOTA_PLANES_TILED",
                         help="Path to tiled dataset")
-    parser.add_argument("--batch_size", type=int, default=16,
+    parser.add_argument("-b", type=int, default=16,
                         help="Batch size for extraction")
     parser.add_argument("--fp32", action="store_true",
                         help="Save as float32 instead of float16")
@@ -182,10 +182,10 @@ def main():
     print(f"Cache directory: {output_dir}")
 
     extract_and_save_features(
-        model_size=args.model_size,
+        model_size=args.m,
         data_dir=args.data_dir,
         output_dir=output_dir,
-        batch_size=args.batch_size,
+        batch_size=args.b,
         device=device,
         use_fp16=not args.fp32
     )
