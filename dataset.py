@@ -17,19 +17,23 @@ DOTA_STD = [0.1846, 0.1832, 0.1800]
 SIGMA = 8.0
 
 
-def mask_to_centers(mask: np.ndarray) -> list:
+def mask_to_centers(mask: np.ndarray, return_areas=False) -> list:
     """Extract object centers from binary mask using connected components."""
     binary = (mask > 127).astype(np.uint8) if mask.max() > 1 else (mask > 0.5).astype(np.uint8)
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
 
     centers = []
+    areas = []
     for i in range(1, num_labels):
         cx, cy = centroids[i]
         area = stats[i, cv2.CC_STAT_AREA]
         if area > 10:
             centers.append((int(cx), int(cy)))
-
-    return centers
+            areas.append(area)
+    if not return_areas:
+        return centers
+    else:
+        return centers, areas
 
 
 def generate_gaussian_heatmap(centers: list, size: int = 512, sigma: float = SIGMA) -> np.ndarray:
@@ -59,11 +63,12 @@ class PreTiledDataset(data.Dataset):
         root/split/mask/*.png
     """
 
-    def __init__(self, root: str, split: str = "train", sigma: float = SIGMA):
+    def __init__(self, root: str, split: str = "train", sigma: float = SIGMA, return_empty=True):
         self.img_dir = os.path.join(root, split, "image")
         self.mask_dir = os.path.join(root, split, "mask")
         self.sigma = sigma
-
+        self.return_empty = return_empty
+        
         self.images = sorted([
             f for f in os.listdir(self.img_dir)
             if f.endswith(".png") and not f.startswith("._")
@@ -76,16 +81,20 @@ class PreTiledDataset(data.Dataset):
         return len(self.images)
 
     def __getitem__(self, idx: int):
-        max_attempts = min(10, len(self.images))
+        max_attempts = min(100, len(self.images))
 
-        for attempt in range(max_attempts):
+        for _ in range(max_attempts):
             try:
                 fname = self.images[idx]
                 img_path = os.path.join(self.img_dir, fname)
                 mask_path = os.path.join(self.mask_dir, fname)
 
-                img = cv2.imread(img_path, cv2.IMREAD_COLOR)
                 mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+                if not self.return_empty and not mask.any():   # all zeros
+                    idx = (idx + 1) % len(self.images)
+                    continue         # skip this sample
+                
+                img = cv2.imread(img_path, cv2.IMREAD_COLOR)
 
                 if img is None or mask is None:
                     raise ValueError(f"Failed to read {fname}")
@@ -97,18 +106,22 @@ class PreTiledDataset(data.Dataset):
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 img_t = torch.from_numpy(img).permute(2, 0, 1).float() / 255.0
                 img_t = TF.normalize(img_t, DOTA_MEAN, DOTA_STD)
+                
+                mask_t = torch.from_numpy(mask)
 
-                centers = mask_to_centers(mask)
+                centers, areas = mask_to_centers(mask, return_areas=True)
                 heatmap = generate_gaussian_heatmap(centers, size=512, sigma=self.sigma)
                 target_t = torch.from_numpy(heatmap).float().unsqueeze(0)
 
                 meta = {
                     "id": fname,
                     "centers": centers,
+                    "areas": areas,
                     "num_objects": len(centers)
                 }
-
-                return img_t, target_t, meta
+                
+                return img_t, target_t, meta, mask_t
+ 
 
             except Exception:
                 idx = (idx + 1) % len(self.images)
@@ -193,8 +206,11 @@ class CachedFeaturesDataset(data.Dataset):
                     "centers": centers,
                     "num_objects": len(centers)
                 }
-
+                
+                # avoid returning images without plan
+                
                 return features, target_t, meta
+
 
             except Exception:
                 idx = (idx + 1) % len(self.feature_files)

@@ -30,7 +30,8 @@ def segdino_collate(batch):
     imgs = torch.stack([item[0] for item in batch])
     targets = torch.stack([item[1] for item in batch])
     metas = [item[2] for item in batch]
-    return imgs, targets, metas
+    masks = torch.stack([item[3] for item in batch])
+    return imgs, targets, metas, masks
 
 
 def generate_run_id(model_size: str) -> str:
