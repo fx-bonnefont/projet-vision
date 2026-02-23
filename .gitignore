@@ -23,6 +23,10 @@ inference_results/
 
 # Attack Results (generated, not versioned)
 attack_results/
+mlruns/
+mlflow.db
+*.sqlite
+*.sqlite3
 
 # Data Directories
 segdata/
@@ -34,3 +38,8 @@ segdata/
 # Agents
 .claude/
 .vscode/
+
+mlflow.db
+mlflow.db-*
+*.db-wal
+*.db-shm

@@ -1,0 +1,14 @@
+huggingface-hub>=0.21
+kornia>=0.8.2
+matplotlib
+mlflow>=3.9.0
+numpy>=1.26,<2.0
+opencv-python-headless>=4.8
+Pillow
+python-dotenv>=1.0
+scikit-image>=0.25.2
+scipy>=1.11
+torch>=2.5
+torchvision>=0.20
+tqdm>=4.66
+transformers>=4.40,<6
