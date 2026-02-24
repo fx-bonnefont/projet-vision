@@ -130,7 +130,7 @@ class FramePatchAttack:
         self.tile_size = DEFAULT_TILE_SIZE
         self.attack_tile_size = self.config.attack_tile_size
 
-        set_seed(self.config.seed)
+        # set_seed(self.config.seed)
         if self.config.mlflow_tracking_uri:
             mlflow.set_tracking_uri(self.config.mlflow_tracking_uri)
         self.mlflow_client = mlflow.tracking.MlflowClient()
@@ -715,56 +715,64 @@ class FramePatchAttack:
 
                 if not self.config.skip_validation:
                     validation = self.validate_attack(attack=self.attack)
-                    mlflow.log_metric("validation_loss", validation["loss"], step=global_step)
+                    mlflow.log_metric(
+                        "validation_loss", 
+                        validation["loss"], 
+                        step=epoch)
+                    mlflow.log_metric(
+                        "avg_train_loss",
+                        avg_train_loss,
+                        step=epoch,
+                    )
                     mlflow.log_metric(
                         "validation_clean_max_prob",
                         validation["clean_max_prob"],
-                        step=global_step,
+                        step=epoch,
                     )
                     mlflow.log_metric(
                         "validation_attacked_max_prob",
                         validation["attacked_max_prob"],
-                        step=global_step,
+                        step=epoch,
                     )
                     mlflow.log_metric(
                         "validation_clean_accuracy",
                         validation["clean_accuracy"],
-                        step=global_step,
+                        step=epoch,
                     )
                     mlflow.log_metric(
                         "validation_clean_precision",
                         validation["clean_precision"],
-                        step=global_step,
+                        step=epoch,
                     )
                     mlflow.log_metric(
                         "validation_clean_recall",
                         validation["clean_recall"],
-                        step=global_step,
+                        step=epoch,
                     )
                     mlflow.log_metric(
                         "validation_clean_f1",
                         validation["clean_f1"],
-                        step=global_step,
+                        step=epoch,
                     )
                     mlflow.log_metric(
                         "validation_attacked_accuracy",
                         validation["attacked_accuracy"],
-                        step=global_step,
+                        step=epoch,
                     )
                     mlflow.log_metric(
                         "validation_attacked_precision",
                         validation["attacked_precision"],
-                        step=global_step,
+                        step=epoch,
                     )
                     mlflow.log_metric(
                         "validation_attacked_recall",
                         validation["attacked_recall"],
-                        step=global_step,
+                        step=epoch,
                     )
                     mlflow.log_metric(
                         "validation_attacked_f1",
                         validation["attacked_f1"],
-                        step=global_step,
+                        step=epoch,
                     )
 
                     message += (
@@ -777,27 +785,27 @@ class FramePatchAttack:
                         f" | Acc={validation['clean_accuracy']:.3f}->{validation['attacked_accuracy']:.3f}"
                     )
 
-                mlflow.log_metric("train_epoch_wall_time_s", epoch_wall_time_s, step=global_step)
-                mlflow.log_metric("train_epoch_step_time_s", epoch_step_time_s, step=global_step)
+                mlflow.log_metric("train_epoch_wall_time_s", epoch_wall_time_s, step=epoch)
+                mlflow.log_metric("train_epoch_step_time_s", epoch_step_time_s, step=epoch)
                 mlflow.log_metric(
                     "train_epoch_unique_images",
                     float(epoch_unique_images),
-                    step=global_step,
+                    step=epoch,
                 )
                 mlflow.log_metric(
                     "train_epoch_effective_image_passes",
                     float(epoch_effective_image_passes),
-                    step=global_step,
+                    step=epoch,
                 )
                 mlflow.log_metric(
                     "train_seconds_per_image_effective",
                     seconds_per_image_effective,
-                    step=global_step,
+                    step=epoch,
                 )
                 mlflow.log_metric(
                     "train_images_per_second_effective",
                     images_per_second_effective,
-                    step=global_step,
+                    step=epoch,
                 )
 
                 tqdm.write(message)

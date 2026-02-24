@@ -44,3 +44,5 @@ mlflow.db
 mlflow.db-*
 *.db-wal
 *.db-shm
+
+*helper*
