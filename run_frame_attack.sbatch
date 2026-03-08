@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=frame-attack
-#SBATCH --partition=P100 
 #SBATCH --gres=gpu:2
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=80G
@@ -28,11 +27,15 @@
 
 
 set -euo pipefail
-mkdir -p cd
 
 # Activate environment and move to project directory.
 cd "${PROJECT_DIR:-$SLURM_SUBMIT_DIR}"
-source "${VENV_ACTIVATE:-vision/bin/activate}"
+source "${VENV_ACTIVATE:-.venv/bin/activate}"
+
+if ! python -m pip --version >/dev/null 2>&1; then
+python -m ensurepip --upgrade
+fi
+python -m pip install -r requirements.txt
 
 # Prevent OpenBLAS / NumPy import failures on constrained HPC jobs.
 # export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"

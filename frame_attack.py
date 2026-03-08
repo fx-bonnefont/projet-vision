@@ -271,6 +271,26 @@ class FramePatchAttack:
                 f"expected local fallback='{fallback_path}'."
             ) from exc
 
+    def _sync_attack_tile_size_from_loaded_attack(self, attack: torch.Tensor, source: str) -> None:
+        """Update attack tile size to match a loaded tensor width when possible."""
+        loaded_width = int(attack.shape[3])
+        if loaded_width % 4 != 0:
+            raise ValueError(
+                f"Attack width must be divisible by 4, got {loaded_width} from {source}."
+            )
+
+        loaded_tile_size = loaded_width // 4
+        if loaded_tile_size == self.attack_tile_size:
+            return
+
+        print(
+            "Loaded attack width does not match configured attack tile size. "
+            f"Overriding attack_tile_size from {self.attack_tile_size} to {loaded_tile_size} "
+            f"based on {source}."
+        )
+        self.attack_tile_size = loaded_tile_size
+        self.config.attack_tile_size = loaded_tile_size
+
     def _validate_attack_tensor(self, attack: torch.Tensor, source: str) -> torch.Tensor:
         """Validate attack tensor shape and return float tensor."""
         if not isinstance(attack, torch.Tensor):
@@ -282,11 +302,7 @@ class FramePatchAttack:
                 f"got {tuple(attack.shape)}."
             )
 
-        if attack.shape[3] != 4 * self.attack_tile_size:
-            raise ValueError(
-                f"Attack width must be {4 * self.attack_tile_size}, got {attack.shape[3]} "
-                f"from {source}."
-            )
+        self._sync_attack_tile_size_from_loaded_attack(attack, source=source)
 
         return attack.float()
 

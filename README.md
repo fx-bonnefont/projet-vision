@@ -259,3 +259,26 @@ Verifier `.env` contient `HF_TOKEN=hf_xxxxx` et demander l'acces aux modeles DIN
 ### Masques non trouves
 
 Les masques doivent avoir exactement le meme nom que les images.
+
+### Références
+
+@ARTICLE{9560031, 
+    author={Ding, Jian and Xue, Nan and Xia, Gui-Song and Bai, Xiang and Yang, Wen and Yang, Michael and Belongie, Serge and Luo, Jiebo and Datcu, Mihai and Pelillo, Marcello and Zhang, Liangpei}, 
+    journal={IEEE Transactions on Pattern Analysis and Machine Intelligence}, 
+    title={Object Detection in Aerial Images: A Large-Scale Benchmark and Challenges}, 
+    year={2021}, 
+    volume={}, 
+    number={}, 
+    pages={1-1}, 
+    doi={10.1109/TPAMI.2021.3117983}
+    }
+
+@misc{simeoni2025dinov3,
+  title={{DINOv3}},
+  author={Sim{\'e}oni, Oriane and Vo, Huy V. and Seitzer, Maximilian and Baldassarre, Federico and Oquab, Maxime and Jose, Cijo and Khalidov, Vasil and Szafraniec, Marc and Yi, Seungeun and Ramamonjisoa, Micha{\"e}l and Massa, Francisco and Haziza, Daniel and Wehrstedt, Luca and Wang, Jianyuan and Darcet, Timoth{\'e}e and Moutakanni, Th{\'e}o and Sentana, Leonel and Roberts, Claire and Vedaldi, Andrea and Tolan, Jamie and Brandt, John and Couprie, Camille and Mairal, Julien and J{\'e}gou, Herv{\'e} and Labatut, Patrick and Bojanowski, Piotr},
+  year={2025},
+  eprint={2508.10104},
+  archivePrefix={arXiv},
+  primaryClass={cs.CV},
+  url={https://arxiv.org/abs/2508.10104},
+}

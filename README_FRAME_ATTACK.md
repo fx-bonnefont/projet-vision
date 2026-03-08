@@ -1,107 +1,75 @@
 # Frame Attack (`frame_attack.py`)
 
-This document explains how `frame_attack.py` is structured and how to use it.
+This file documents the current behavior and CLI of `frame_attack.py`.
 
-## What This Script Does
+## What It Does
 
-`frame_attack.py` trains an adversarial **frame attack** against a frozen SegDino detector.
+`frame_attack.py` trains an adversarial border attack against a frozen SegDino model.
 
-- The model is loaded from a checkpoint and frozen.
-- A trainable tensor (`attack`) is optimized.
-- For each object center in a tile, the script draws a learned border around the object region.
-- The optimization objective is selected from multiple attack losses.
+- Loads a checkpoint and freezes model weights.
+- Trains a tensor `attack` with shape `[1, 3, thickness, 4 * attack_tile_size]`.
+- Splits the tensor into `left/top/right/bottom` strips.
+- Draws those strips around each object center (radius derived from object area).
+- Optimizes one of several attack objectives.
+- Logs metrics/artifacts to MLflow and saves `runs/<run_id>_attack.pt`.
 
-The script logs metrics to MLflow and saves the learned attack tensor to `runs/<run_id>_attack.pt`.
+## Main Components
 
-## High-Level Architecture
+- `AttackConfig`: runtime config dataclass.
+- `FramePatchAttack`: data loading, attack init/load/apply, loss, train/validation/test evaluation, plotting.
+- `parse_args()`: CLI parsing and validation.
+- `main()`: CLI entrypoint.
 
-Main components in `frame_attack.py`:
+## Objectives
 
-- `AttackConfig`: dataclass holding all runtime options.
-- `FramePatchAttack`: core class that handles:
-  - model loading/freeze
-  - data loader creation
-  - attack tensor init/load/save
-  - attack application to images
-  - objective computation
-  - training + validation loops
-  - optional visualization helpers
-- `parse_args()`: CLI argument parsing + validation.
-- `main()`: entrypoint that builds config, trains, and prints the resulting `run_id`.
+`--objective` choices:
 
-## How Attack Application Works
+- `suppress_count` (default): minimizes `sigmoid(temp * (prob - threshold)).mean()`.
+- `suppress_confidence`: minimizes mean attacked probability.
+- `divergence`: minimizes `-MSE(attacked_prob, clean_prob)` (maximizes difference).
+- `center_like`: minimizes negative of a CenterLoss-like distance (MSE + focal-like term) to clean predictions.
 
-The attack tensor shape is:
+Objective-specific args:
 
-- `[1, 3, thickness, 4 * TILE_SIZE]`
+- `--count-threshold`, `--count-temperature` for `suppress_count`.
+- `--center-alpha`, `--center-focal-alpha`, `--center-focal-gamma` for `center_like`.
 
-It is split into 4 strips:
+## Dataset Layout
 
-- left, top, right, bottom
-
-For each object center (from metadata), the script:
-
-1. Converts object area to a square radius.
-2. Computes a box around the center.
-3. Resizes each strip to match border dimensions.
-4. Writes the strips around the box on the normalized input image tensor.
-
-## Available Objectives
-
-`--objective` supports:
-
-- `suppress_count` (default)
-  - Minimizes a soft thresholded count:
-  - `sigmoid(temp * (prob - threshold)).mean()`
-  - Best aligned with reducing detections above threshold.
-- `suppress_confidence`
-  - Minimizes average attacked probability map.
-- `divergence`
-  - Minimizes `-MSE(attacked_prob, clean_prob)` (equivalent to maximizing map difference).
-- `center_like`
-  - Uses a CenterLoss-like distance (MSE + focal-like term) against clean prediction as target.
-  - The attack minimizes the negative of that distance (maximizes discrepancy).
-
-Related args:
-
-- `--count-threshold`, `--count-temperature` for `suppress_count`
-- `--center-alpha`, `--center-focal-alpha`, `--center-focal-gamma` for `center_like`
-
-## Dataset Expectations
-
-`--data-dir` must contain:
+`--data-dir` must provide:
 
 - `train/image/*.png`
 - `train/mask/*.png`
 - `test/image/*.png`
 - `test/mask/*.png`
 
-## Default Checkpoint
+By default, empty tiles are filtered out for speed. Use `--include-empty-tiles` to disable this filtering.
 
-Default model checkpoint:
+## Default Checkpoint
 
 - `runs/16_02-21_05_12_BASE_animal-variation.pth`
 
-You can override with `--checkpoint`.
+Override with `--checkpoint`.
 
-## Command Line Usage
+## CLI Usage
 
-Run from repository root.
+Run from repo root.
 
-### 1) Minimal command (all defaults)
+Minimal run:
 
 ```bash
-./.venv/bin/python frame_attack.py
+uv run python frame_attack.py
 ```
 
-### 2) Full command (all explicit defaults)
+Full command with explicit static defaults:
 
 ```bash
-./.venv/bin/python frame_attack.py \
+uv run python frame_attack.py \
   --checkpoint "runs/16_02-21_05_12_BASE_animal-variation.pth" \
   --epochs 2 \
   --learning-rate 0.5 \
   --batch-size 16 \
+  --attack-tile-size 512 \
   --thickness 24 \
   --batch-repetition 1 \
   --early-stop 1000000 \
@@ -110,6 +78,9 @@ Run from repository root.
   --validation-ratio 0.3 \
   --save-every 50 \
   --seed 1619 \
+  --experiment-name "patch-attack" \
+  --eval-threshold 0.3 \
+  --match-radius 20.0 \
   --objective suppress_count \
   --count-threshold 0.3 \
   --count-temperature 10.0 \
@@ -120,42 +91,53 @@ Run from repository root.
 
 Notes:
 
-- `--skip-validation` is a flag (default is disabled).
-- `--attack-id` and `--attack-path` default to `None` (only pass when resuming/initializing from an existing attack).
+- `--run-name` defaults to an auto-generated codename.
+- `--mlflow-tracking-uri` defaults to the currently configured MLflow tracking URI.
+- `--skip-validation` is disabled by default.
+- `--attack-id` / `--attack-path` default to `None`.
 
-## Resume / Warm Start Options
+## Warm Start / Resume
 
-Initialize attack from previous artifacts:
-
-- From MLflow run:
-
-```bash
-./.venv/bin/python frame_attack.py --attack-id <run_id>
-```
-
-- From local file:
+From MLflow run artifact:
 
 ```bash
-./.venv/bin/python frame_attack.py --attack-path runs/<run_id>_attack.pt
+uv run python frame_attack.py --attack-id <run_id>
 ```
 
-If both are provided, `--attack-path` is used first.
+From local attack tensor:
 
-## Output and Logging
+```bash
+uv run python frame_attack.py --attack-path runs/<run_id>_attack.pt
+```
 
-During training, the script:
+If both are provided, `--attack-path` takes priority.  
+If MLflow download fails for `--attack-id`, the script tries local fallback `runs/<run_id>_attack.pt`.
+When a loaded attack width implies a different tile size (`width / 4`), `attack_tile_size` is auto-synced.
 
-- logs metrics to MLflow (`training_loss`, max probs, validation metrics)
-- periodically saves `runs/<run_id>_attack.pt`
-- prints epoch summaries with objective + train/validation losses
+## Logging and Outputs
 
-Final line includes the MLflow run id:
+During training the script:
+
+- Logs MLflow params and training metrics (`training_loss`, max clean/attacked prediction, throughput metrics).
+- Optionally logs validation metrics each epoch (`loss`, max prob, accuracy/precision/recall/F1, TP/FP/FN).
+- Periodically saves attack checkpoints when `--save-every > 0`.
+- Always saves the final attack to `runs/<run_id>_attack.pt`.
+
+Final CLI output includes:
 
 - `Attack trained and saved with run_id: <run_id>`
 
-## Notebook Visualization
+## Evaluation Metrics
 
-After running training from CLI, use the `run_id` in a notebook:
+Validation/test evaluation is center-based:
+
+- peak extraction threshold: `--eval-threshold`
+- matching radius: `--match-radius`
+- reported metrics for clean and attacked predictions:
+  - accuracy, precision, recall, F1
+  - TP, FP, FN counts
+
+## Visualization from Notebook
 
 ```python
 from frame_attack import AttackConfig, FramePatchAttack
@@ -175,10 +157,10 @@ attacker = FramePatchAttack(cfg)
 attacker.plot_interesting_images()
 ```
 
-Alternative: load from local file with `attack_path="runs/<run_id>_attack.pt"`.
+You can also load with `attack_path="runs/<run_id>_attack.pt"`.
 
 ## Troubleshooting
 
-- `ModuleNotFoundError` (e.g., `cv2`): run through your project venv (`./.venv/bin/python ...`).
-- Missing artifacts via `--attack-id`: ensure the same MLflow tracking URI is used in CLI and notebook.
-- Empty/invalid dataset errors: verify `image/` and `mask/` folder names and PNG files.
+- Missing Python packages (for example `cv2`): run through project env (`uv run ...` or venv Python).
+- `--attack-id` cannot fetch artifacts: check MLflow tracking URI and run id; local fallback path is `runs/<run_id>_attack.pt`.
+- No objects / split errors: verify mask files and object annotations exist in `train`/`test`.
