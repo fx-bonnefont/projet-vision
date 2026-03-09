@@ -1,3 +1,11 @@
+import sys
+from pathlib import Path
+
+if __package__ is None or __package__ == "":
+    project_root = str(Path(__file__).resolve().parents[1])
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
 import os
 import torch
 import numpy as np
@@ -8,13 +16,13 @@ plt.ion()
 
 from sklearn.decomposition import PCA
 
-from model import SegDino
-from train_patch5 import AdversarialPatch
+from pca_visualisation.model import SegDino
+from pca_visualisation.train_patch5 import AdversarialPatch
 from dataset import PreTiledDataset
 
 from inference import find_peaks, mask_to_centers
 
-from compare_embeddings import get_dino_embeddings
+from pca_visualisation.compare_embeddings import get_dino_embeddings
 
 # ---------------------------------------------------------
 # CONFIG

@@ -177,7 +177,7 @@ def main():
         total_tp_patched = 0
         n_batches = 0
 
-        for images, _, metas in tqdm(loader, desc=f"epoch {epoch}/{args.e}", leave=False):
+        for images, _, metas, _ in tqdm(loader, desc=f"epoch {epoch}/{args.e}", leave=False):
             images = images.to(device)
 
             # Forward + backward

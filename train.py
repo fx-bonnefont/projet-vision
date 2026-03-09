@@ -42,7 +42,7 @@ def generate_run_id(model_size: str) -> str:
 def train_epoch(model, loader, criterion, optimizer, device):
     model.train()
     total_loss = 0.0
-    for imgs, targets, _ in tqdm(loader, desc="train", leave=False):
+    for imgs, targets, _, _ in tqdm(loader, desc="train", leave=False):
         imgs, targets = imgs.to(device), targets.to(device)
         optimizer.zero_grad()
         logits = model(imgs)
@@ -60,7 +60,7 @@ def evaluate(model, loader, criterion, device):
     total_loss = 0.0
     total_tp, total_fp, total_fn = 0, 0, 0
 
-    for imgs, targets, metas in tqdm(loader, desc="eval", leave=False):
+    for imgs, targets, metas, _ in tqdm(loader, desc="eval", leave=False):
         imgs, targets = imgs.to(device), targets.to(device)
         logits = model(imgs)
         total_loss += criterion(logits, targets).item()

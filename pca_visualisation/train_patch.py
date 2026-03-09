@@ -4,6 +4,14 @@ Adversarial patch training for SegDino center detection.
 Trains a small RGB patch (e.g. 16x16) that, when placed on tiles,
 minimizes the number of detected centers (false negative attack).
 """
+import sys
+from pathlib import Path
+
+if __package__ is None or __package__ == "":
+    project_root = str(Path(__file__).resolve().parents[1])
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
 import argparse
 import csv
 import os
@@ -177,7 +185,7 @@ def main():
         total_tp_patched = 0
         n_batches = 0
 
-        for images, _, metas in tqdm(loader, desc=f"epoch {epoch}/{args.e}", leave=False):
+        for images, _, metas, _ in tqdm(loader, desc=f"epoch {epoch}/{args.e}", leave=False):
             images = images.to(device)
 
             # Forward + backward

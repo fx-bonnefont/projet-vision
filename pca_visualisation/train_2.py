@@ -1,6 +1,14 @@
 """
 SegDino training for center detection.
 """
+import sys
+from pathlib import Path
+
+if __package__ is None or __package__ == "":
+    project_root = str(Path(__file__).resolve().parents[1])
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
 import argparse
 import os
 import random
@@ -12,10 +20,10 @@ from tqdm import tqdm
 
 from codenames import generate_codename
 from dataset import CachedFeaturesDataset
-from extract_features import extract_and_save_features, get_cache_dir
+from pca_visualisation.extract_features import extract_and_save_features, get_cache_dir
 from inference import find_peaks, match_centers
 from loss import CenterLoss
-from model import DecoderOnly
+from pca_visualisation.model import DecoderOnly
 
 torch.backends.cudnn.benchmark = True
 
@@ -44,7 +52,7 @@ def train_epoch(model, loader, criterion, optimizer, device):
     model.train()
     total_loss = 0.0
 
-    for imgs, targets, _ in tqdm(loader, desc="train", leave=False):
+    for imgs, targets, _, _ in tqdm(loader, desc="train", leave=False):
         imgs, targets = imgs.to(device), targets.to(device)
 
         optimizer.zero_grad()
@@ -72,7 +80,7 @@ def evaluate(model, loader, criterion, device):
     total_loss = 0.0
     total_tp, total_fp, total_fn = 0, 0, 0
 
-    for imgs, targets, metas in tqdm(loader, desc="eval", leave=False):
+    for imgs, targets, metas, _ in tqdm(loader, desc="eval", leave=False):
         imgs, targets = imgs.to(device), targets.to(device)
 
         # FP16 inference

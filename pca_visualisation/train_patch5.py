@@ -4,6 +4,14 @@ Adversarial patch training for SegDino center detection.
 Trains a small RGB patch (e.g. 16x16) that, when placed on tiles,
 minimizes the number of detected centers (false negative attack).
 """
+import sys
+from pathlib import Path
+
+if __package__ is None or __package__ == "":
+    project_root = str(Path(__file__).resolve().parents[1])
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
 import argparse
 import csv
 import os
@@ -20,7 +28,7 @@ from torch.amp import autocast, GradScaler
 from dataset import DOTA_MEAN, DOTA_STD, PreTiledDataset, mask_to_centers
 from inference import find_peaks, load_checkpoint, match_centers
 from train import segdino_collate
-from model import DINOv3Backbone
+from pca_visualisation.model import DINOv3Backbone
 
 DATA_DIR = "data/DOTA/DOTA_PLANES_TILED"
 SAVE_DIR = "attack_results"
@@ -309,7 +317,7 @@ def main():
         total_loss = 0.0
         n_batches = 0
         
-        for images, _, metas in tqdm(loader, desc=f"epoch {epoch}/{args.e}", leave=False):
+        for images, _, metas, _ in tqdm(loader, desc=f"epoch {epoch}/{args.e}", leave=False):
             images = images.to(device)
 
             batch_centers = []
@@ -347,7 +355,7 @@ def main():
         total_gt = 0
         unattackable = set()
         with torch.no_grad(), autocast("cuda"):
-            for images, _, metas in tqdm(loader, desc=f"test {epoch}/{args.e}", leave=False):
+            for images, _, metas, _ in tqdm(loader, desc=f"test {epoch}/{args.e}", leave=False):
                 images = images.to(device)
 
                 batch_centers = []

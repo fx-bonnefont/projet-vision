@@ -1,15 +1,23 @@
+import sys
+from pathlib import Path
+
+if __package__ is None or __package__ == "":
+    project_root = str(Path(__file__).resolve().parents[1])
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 # from torchvision import transforms
 from PIL import Image
 from dataset import PreTiledDataset, mask_to_centers
-from train_patch5 import AdversarialPatch
+from pca_visualisation.train_patch5 import AdversarialPatch
 
 # ------------------------------------------------------------
 # 1. Importer ton AttentionViewer
 # ------------------------------------------------------------
-from model import AttentionViewer   # <-- adapte le nom du fichier
+from pca_visualisation.model import AttentionViewer   # <-- adapte le nom du fichier
 
 # ------------------------------------------------------------
 # 2. Charger le modèle DINOv3 small-plus (HuggingFace)

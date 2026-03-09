@@ -8,6 +8,14 @@ Usage:
     python extract_features.py -m small-plus --data-dir segdata/DOTA/DOTA_PLANES_TILED
     python extract_features.py -m large-sat --data-dir segdata/DOTA/DOTA_PLANES_TILED
 """
+import sys
+from pathlib import Path
+
+if __package__ is None or __package__ == "":
+    project_root = str(Path(__file__).resolve().parents[1])
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
 import argparse
 import os
 
@@ -17,7 +25,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from dataset import DOTA_MEAN, DOTA_STD
-from model import DINOv3Backbone, LAYER_INDICES, DINOV3_MODELS
+from pca_visualisation.model import DINOv3Backbone, LAYER_INDICES, DINOV3_MODELS
 
 
 def extract_and_save_features(

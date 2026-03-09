@@ -9,6 +9,14 @@ Fast evaluation of an adversarial patch on SegDino.
 Optimized version: 3x–10x faster.
 """
 
+import sys
+from pathlib import Path
+
+if __package__ is None or __package__ == "":
+    project_root = str(Path(__file__).resolve().parents[1])
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
 import argparse
 import cv2
 import os
@@ -21,7 +29,7 @@ from tqdm import tqdm
 from dataset import PreTiledDataset, mask_to_centers
 from inference import find_peaks, match_centers
 from train import segdino_collate
-from train_patch import AdversarialPatch
+from pca_visualisation.train_patch import AdversarialPatch
 
 DATA_DIR = "data/DOTA/DOTA_PLANES_TILED"
 
@@ -84,7 +92,7 @@ def main():
     clean_cache = {}
 
     with torch.no_grad():
-        for images, _, metas in tqdm(loader, desc="clean"):
+        for images, _, metas, _ in tqdm(loader, desc="clean"):
             images = images.to(device)
             heatmaps_clean = attacker.predict_heatmaps(images)
 
@@ -99,7 +107,7 @@ def main():
     image_stats = {}
 
     with torch.no_grad():
-        for images, _, metas in tqdm(loader, desc="patched"):
+        for images, _, metas, _ in tqdm(loader, desc="patched"):
             images = images.to(device)
             heatmaps_patched = attacker.predict_heatmaps_patched(images)
 

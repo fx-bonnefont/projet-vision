@@ -1,3 +1,11 @@
+import sys
+from pathlib import Path
+
+if __package__ is None or __package__ == "":
+    project_root = str(Path(__file__).resolve().parents[1])
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
 import argparse
 import csv
 import os
@@ -15,8 +23,8 @@ from torch.amp import autocast, GradScaler
 from dataset import DOTA_MEAN, DOTA_STD, PreTiledDataset, mask_to_centers
 from inference import find_peaks, load_checkpoint, match_centers
 from train import segdino_collate
-from model import DINOv3Backbone, LAYER_INDICES
-from train_patch5 import AdversarialPatch, make_run_id, save_patch_image
+from pca_visualisation.model import DINOv3Backbone, LAYER_INDICES
+from pca_visualisation.train_patch5 import AdversarialPatch, make_run_id, save_patch_image
 
 from sklearn.decomposition import PCA
 
