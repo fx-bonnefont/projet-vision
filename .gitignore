@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *.so
+*.db
 
 # Virtual Environment
 .venv/
